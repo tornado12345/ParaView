@@ -49,6 +49,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <QtDebug>
 
 #include <algorithm>
+#include <cassert>
 
 //=============================================================================
 namespace rfm
@@ -166,11 +167,11 @@ void pqRecentFilesMenu::buildMenu()
   {
     if (!criter.key().isEmpty())
     {
-      Q_ASSERT(this->SortByServers == true);
+      assert(this->SortByServers == true);
 
       // Add a separator for the server.
       QAction* const action = new QAction(criter.key(), this->Menu);
-      action->setIcon(QIcon(":/pqWidgets/Icons/pqConnect16.png"));
+      action->setIcon(QIcon(":/pqWidgets/Icons/pqConnect.svg"));
 
       // ensure that the server stands out
       QFont font = action->font();

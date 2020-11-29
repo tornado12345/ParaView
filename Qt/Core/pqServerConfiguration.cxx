@@ -36,15 +36,16 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "vtkPVXMLElement.h"
 #include "vtkPVXMLParser.h"
 
-#include <QStringList>
-#include <QTextStream>
-#include <sstream>
-
 #include <QDebug>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QProcess>
+#include <QStringList>
+#include <QTextStream>
+
+#include <cassert>
+#include <sstream>
 
 #define SERVER_CONFIGURATION_DEFAULT_NAME "unknown"
 
@@ -66,7 +67,7 @@ pqServerConfiguration::pqServerConfiguration(vtkPVXMLElement* xml, int connectio
 //-----------------------------------------------------------------------------
 void pqServerConfiguration::constructor(vtkPVXMLElement* xml, int connectionTimeout)
 {
-  Q_ASSERT(xml && xml->GetName() && strcmp(xml->GetName(), "Server") == 0);
+  assert(xml && xml->GetName() && strcmp(xml->GetName(), "Server") == 0);
   this->XML = xml;
   this->ConnectionTimeout = connectionTimeout;
   this->Mutable = true;
@@ -212,7 +213,7 @@ vtkPVXMLElement* pqServerConfiguration::startupXML() const
 //-----------------------------------------------------------------------------
 QString pqServerConfiguration::termCommand()
 {
-#if defined(__linux)
+#if defined(__linux__)
   // Based on i3 code
   // https://github.com/i3/i3/blob/next/i3-sensible-terminal
   QStringList termNames = { qgetenv("TERMINAL"), "x-terminal-emulator", "urxvt", "rxvt", "termit",
@@ -290,7 +291,7 @@ QString pqServerConfiguration::lookForCommand(QString command)
   QString whichCommand = "which";
 #endif
 
-  lookForProcess.start(whichCommand);
+  lookForProcess.start(whichCommand, QStringList());
   if (!lookForProcess.waitForFinished())
   {
     qCritical() << "Could not find \"" << whichCommand
@@ -424,7 +425,7 @@ QString pqServerConfiguration::command(double& timeout, double& delay) const
       // Recover full ssh command
       QString sshFullCommand = this->sshFullCommand(sshCommand, sshConfigXML);
 
-#if defined(__linux)
+#if defined(__linux__)
       // Simple askpass support
       vtkPVXMLElement* sshAskpassXML = sshConfigXML->FindNestedElementByName("Askpass");
       if (sshAskpassXML)
@@ -450,7 +451,7 @@ QString pqServerConfiguration::command(double& timeout, double& delay) const
         }
         if (!termCommand.isEmpty())
         {
-#if defined(__linux)
+#if defined(__linux__)
           stream << termCommand << " -e ";
 #elif defined(_WIN32)
           stream << "cmd /C start \"SSH Terminal\" " << termCommand << " /C ";
@@ -472,15 +473,15 @@ QString pqServerConfiguration::command(double& timeout, double& delay) const
       {
         /* Command explanation :
            /bin/sh : because QProcess can run only a single command at a time
-           echo sshCommand remoteCommand into a temporary script : because MacOS Terminal can only
-           run a
-           single command or a script
+           echo sshCommand remoteCommand into a temporary shell script :
+           because MacOS Terminal can only run a single command or a single script
            ps, pid and kill : because MacOS do not close Terminal app after running the script
            chmod Saved State : When killing an application, MacOS will try to restore its state next
            time it runs. We ensure that this does not happen by changing permissions.
            rm script to clean up at the end.
          */
-        stream << "/bin/sh -c \"tmpFile=`mktemp`; echo \'" << sshFullCommand << " " << execCommand
+        stream << "/bin/sh -c \"tmpFile=`mktemp`; echo \'#!/bin/sh\n"
+               << sshFullCommand << " " << execCommand
                << ";pid=`ps -o ppid= -p $PPID`; ppid=`ps -o ppid= -p $pid`; kill -2 $ppid; exit\'"
                   "> $tmpFile; chmod +x $tmpFile; chmod -rw ~/Library/Saved\\ Application\\ "
                   "State/com.apple.Terminal.savedState/; open -W -n -a Terminal $tmpFile; rm "
@@ -638,7 +639,7 @@ void pqServerConfiguration::setStartupToCommand(
     startupElement->FindNestedElementByName(CommandXMLString.toUtf8().data());
 
   QStringList commandList = command_str.split(" ", QString::SkipEmptyParts);
-  Q_ASSERT(commandList.size() >= 1);
+  assert(commandList.size() >= 1);
 
   xmlCommand->SetAttribute("exec", commandList[0].toLocal8Bit().data());
   xmlCommand->SetAttribute("timeout", QString::number(timeout).toUtf8().data());

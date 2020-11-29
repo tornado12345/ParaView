@@ -81,21 +81,42 @@ public:
   bool tabVisibility() const;
 
   /**
-  * Return the layout proxy.
+  * Return the layout proxy for the current tab.
   */
   vtkSMViewLayoutProxy* layoutProxy() const;
 
-signals:
+  /**
+   * Returns whether frame decorations are shown.
+   */
+  bool decorationsVisibility() const;
+
+  /**
+   * Locate the pqMultiViewWidget associated with the vtkSMViewLayoutProxy held
+   * by this pqTabbedMultiViewWidget instance, if any.
+   */
+  pqMultiViewWidget* findTab(vtkSMViewLayoutProxy*) const;
+
+Q_SIGNALS:
   /**
   * fired when lockViewSize() is called.
   */
   void viewSizeLocked(bool);
 
-public slots:
-  virtual void createTab();
-  virtual void createTab(pqServer*);
-  virtual void createTab(vtkSMViewLayoutProxy*);
+public Q_SLOTS:
+  virtual int createTab();
+  virtual int createTab(pqServer*);
+  virtual int createTab(vtkSMViewLayoutProxy*);
   virtual void closeTab(int);
+
+  //@{
+  /**
+   * When set to false, all decorations including title frames, separators,
+   * tab-bars are hidden.
+   */
+  void setDecorationsVisibility(bool);
+  void showDecorations() { this->setDecorationsVisibility(true); }
+  void hideDecorations() { this->setDecorationsVisibility(false); }
+  //@}
 
   /**
   * toggles fullscreen state.
@@ -138,7 +159,7 @@ public slots:
    */
   QSize preview(const QSize& previewSize = QSize());
 
-protected slots:
+protected Q_SLOTS:
   /**
   * slots connects to corresponding signals on pqServerManagerObserver.
   */
@@ -153,24 +174,10 @@ protected slots:
   virtual void currentTabChanged(int);
 
   /**
-  * called when a frame in pqMultiViewWidget is activated. Ensures that that
-  * widget is visible.
-  */
-  virtual void frameActivated();
-
-  /**
   * verifies that all views loaded from state are indeed assigned to some view
   * layout, or we just assign them to one.
   */
   virtual void onStateLoaded();
-
-  /**
-  * called when pqObjectBuilder is about to create a new view. We ensure that
-  * a layout exists to accept that view. This is essential for collaborative
-  * mode to work correctly without ending up multiple layouts on the two
-  * processes.
-  */
-  virtual void aboutToCreateView(pqServer*);
 
   /**
   * called when context menu need to be created on the tab title.
@@ -181,11 +188,6 @@ protected slots:
 
 protected:
   bool eventFilter(QObject* obj, QEvent* event) override;
-
-  /**
-  * assigns a frame to the view.
-  */
-  virtual void assignToFrame(pqView*, bool warnIfTabCreated);
 
   /**
   * Internal class used as the TabWidget.

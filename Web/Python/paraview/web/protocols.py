@@ -28,10 +28,9 @@ from vtkmodules.vtkCommonDataModel import vtkImageData, vtkDataObject
 from vtkmodules.vtkCommonCore      import vtkUnsignedCharArray, vtkCollection
 from vtkmodules.vtkWebCore         import vtkDataEncoder, vtkWebInteractionEvent
 
-from paraview.modules.vtkPVServerManagerRendering    import vtkSMPVRepresentationProxy, vtkSMTransferFunctionProxy, vtkSMTransferFunctionManager
-from paraview.modules.vtkPVServerManagerCore         import vtkSMProxyManager
-from paraview.modules.vtkPVClientServerCoreCore      import vtkProcessModule
-from paraview.modules.vtkPVClientServerCoreRendering import vtkPVRenderView
+from paraview.servermanager import vtkSMPVRepresentationProxy, \
+        vtkSMTransferFunctionProxy, vtkSMTransferFunctionManager, \
+        vtkSMProxyManager, vtkProcessModule, vtkPVRenderView
 
 if sys.version_info >= (3,):
     xrange = range
@@ -429,8 +428,8 @@ class ParaViewWebPublishImageDelivery(ParaViewWebProtocol):
     def __init__(self, decode=True, **kwargs):
         ParaViewWebProtocol.__init__(self)
         self.trackingViews = {}
-        self.lastStaleTime = 0
-        self.staleHandlerCount = 0
+        self.lastStaleTime = {}
+        self.staleHandlerCount = {}
         self.deltaStaleTimeBeforeRender = 0.5 # 0.5s
         self.decode = decode
         self.viewsInAnimations = []
@@ -476,24 +475,25 @@ class ParaViewWebPublishImageDelivery(ParaViewWebProtocol):
             reply["id"] = vId
             self.publish('viewport.image.push.subscription', reply)
         if stale:
-            self.lastStaleTime = time.time()
-            if self.staleHandlerCount == 0:
-                self.staleHandlerCount += 1
+            self.lastStaleTime[vId] = time.time()
+            if self.staleHandlerCount[vId] == 0:
+                self.staleHandlerCount[vId] += 1
                 reactor.callLater(self.deltaStaleTimeBeforeRender, lambda: self.renderStaleImage(vId))
         else:
-            self.lastStaleTime = 0
+            self.lastStaleTime[vId] = 0
 
 
     def renderStaleImage(self, vId):
-        self.staleHandlerCount -= 1
+        if vId in self.staleHandlerCount:
+            self.staleHandlerCount[vId] -= 1
 
-        if self.lastStaleTime != 0:
-            delta = (time.time() - self.lastStaleTime)
-            if delta >= self.deltaStaleTimeBeforeRender:
-                self.pushRender(vId)
-            else:
-                self.staleHandlerCount += 1
-                reactor.callLater(self.deltaStaleTimeBeforeRender - delta + 0.001, lambda: self.renderStaleImage(vId))
+            if self.lastStaleTime[vId] != 0:
+                delta = (time.time() - self.lastStaleTime[vId])
+                if delta >= self.deltaStaleTimeBeforeRender:
+                    self.pushRender(vId)
+                else:
+                    self.staleHandlerCount[vId] += 1
+                    reactor.callLater(self.deltaStaleTimeBeforeRender - delta + 0.001, lambda: self.renderStaleImage(vId))
 
 
     def animate(self):
@@ -663,6 +663,7 @@ class ParaViewWebPublishImageDelivery(ParaViewWebProtocol):
             tagStop = self.getApplication().AddObserver('EndInteractionEvent', stopCallback)
             # TODO do we need self.getApplication().AddObserver('ResetActiveView', resetActiveView())
             self.trackingViews[realViewId] = { 'tags': [tag, tagStart, tagStop], 'observerCount': 1, 'mtime': 0, 'enabled': True, 'quality': 100, 'streaming': sView.GetClientSideObject().GetEnableStreaming() }
+            self.staleHandlerCount[realViewId] = 0
         else:
             # There is an observer on this view already
             self.trackingViews[realViewId]['observerCount'] += 1
@@ -673,11 +674,13 @@ class ParaViewWebPublishImageDelivery(ParaViewWebProtocol):
 
     @exportRpc("viewport.image.push.observer.remove")
     def removeRenderObserver(self, viewId):
-        sView = self.getView(viewId)
-        if not sView:
-            return { 'error': 'Unable to get view with id %s' % viewId }
+        sView = None
+        try:
+            sView = self.getView(viewId)
+        except:
+            print('no view with ID %s available in removeRenderObserver' % viewId)
 
-        realViewId = sView.GetGlobalIDAsString()
+        realViewId = sView.GetGlobalIDAsString() if sView else viewId
 
         observerInfo = None
         if realViewId in self.trackingViews:
@@ -692,6 +695,7 @@ class ParaViewWebPublishImageDelivery(ParaViewWebProtocol):
             for tag in observerInfo['tags']:
                 self.getApplication().RemoveObserver(tag)
             del self.trackingViews[realViewId]
+            del self.staleHandlerCount[realViewId]
 
         return { 'result': 'success' }
 
@@ -1109,7 +1113,7 @@ class ParaViewWebColorManager(ParaViewWebProtocol):
         super(ParaViewWebColorManager, self).__init__()
         if pathToColorMaps:
             simple.ImportPresets(filename=pathToColorMaps)
-        self.presets = servermanager.vtkSMTransferFunctionPresets()
+        self.presets = servermanager.vtkSMTransferFunctionPresets.GetInstance()
         self.colorMapNames = []
         for i in range(self.presets.GetNumberOfPresets()):
             if showBuiltin or not self.presets.IsPresetBuiltin(i):
@@ -1784,10 +1788,9 @@ class ParaViewWebProxyManager(ParaViewWebProtocol):
         foundPLDChild = False
         subProxiesToProcess = []
 
-        pldChild = proxyPropElement.FindNestedElementByName('ProxyListDomain')
+        domain = propInstance.FindDomain("vtkSMProxyListDomain")
 
-        if pldChild:
-            domain = propInstance.GetDomain(pldChild.GetAttribute('name'))
+        if domain:
             foundPLDChild = True
             for j in range(domain.GetNumberOfProxies()):
                 subProxy = domain.GetProxy(j)
@@ -2137,7 +2140,7 @@ class ParaViewWebProxyManager(ParaViewWebProtocol):
             if prop.IsA('vtkSMProxyProperty'):
                 try:
                     if len(prop.Available) and prop.GetNumberOfProxies() == 1:
-                        listdomain = prop.GetDomain('proxy_list')
+                        listdomain = prop.FindDomain("vtkSMProxyListDomain")
                         if listdomain:
                             for i in xrange(listdomain.GetNumberOfProxies()):
                                 internal_proxy = listdomain.GetProxy(i)
@@ -2438,7 +2441,7 @@ class ParaViewWebProxyManager(ParaViewWebProtocol):
             groupInfo = groupList[idx]
             group = groupInfo['group']
             parentGroup = groupInfo['parentGroup']
-            if group is not 'root' and self.groupDetailsMap[group]['groupVisibility'] == 'never':
+            if group != 'root' and self.groupDetailsMap[group]['groupVisibility'] == 'never':
                 self.debug('Culling property (%s) in group (%s) because group has visibility never' % (propList[idx]['name'], group))
                 continue
             if not group in groupMap:
@@ -2483,7 +2486,7 @@ class ParaViewWebProxyManager(ParaViewWebProtocol):
         # case, the group should be marked the same.
         if uiList:
             for groupName in groupMap:
-                if groupName is not 'root' and 'ui' in groupMap[groupName]:
+                if groupName != 'root' and 'ui' in groupMap[groupName]:
                     groupUiList = groupMap[groupName]['ui']
                     firstUiElt = groupUiList[0]
                     groupDependency = False
@@ -2976,7 +2979,7 @@ class ParaViewWebStartupRemoteConnection(ParaViewWebProtocol):
 
     connected = False
 
-    def __init__(self, dsHost = None, dsPort = 11111, rsHost=None, rsPort=22222, rcPort=-1, **kwargs):
+    def __init__(self, dsHost = None, dsPort = 11111, rsHost=None, rsPort=22221, rcPort=-1, **kwargs):
         super(ParaViewWebStartupRemoteConnection, self).__init__()
         if not ParaViewWebStartupRemoteConnection.connected and dsHost:
             ParaViewWebStartupRemoteConnection.connected = True
@@ -3153,7 +3156,7 @@ class ParaViewWebFileListing(ParaViewWebProtocol):
 # Handle Data Selection
 #
 # =============================================================================
-from paraview.modules.vtkPVClientServerCoreRendering import *
+from paraview.modules.vtkRemotingCore import *
 from vtkmodules.vtkCommonCore import *
 
 class ParaViewWebSelectionHandler(ParaViewWebProtocol):

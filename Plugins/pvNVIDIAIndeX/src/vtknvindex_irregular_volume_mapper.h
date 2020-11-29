@@ -1,34 +1,34 @@
-/* Copyright 2018 NVIDIA Corporation. All rights reserved.
-*
-* Redistribution and use in source and binary forms, with or without
-* modification, are permitted provided that the following conditions
-* are met:
-*  * Redistributions of source code must retain the above copyright
-*    notice, this list of conditions and the following disclaimer.
-*  * Redistributions in binary form must reproduce the above copyright
-*    notice, this list of conditions and the following disclaimer in the
-*    documentation and/or other materials provided with the distribution.
-*  * Neither the name of NVIDIA CORPORATION nor the names of its
-*    contributors may be used to endorse or promote products derived
-*    from this software without specific prior written permission.
-*
-* THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS ``AS IS'' AND ANY
-* EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-* IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
-* PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR
-* CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
-* EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
-* PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
-* PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
-* OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-* (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-* OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-*/
+/* Copyright 2020 NVIDIA Corporation. All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *  * Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ *  * Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *  * Neither the name of NVIDIA CORPORATION nor the names of its
+ *    contributors may be used to endorse or promote products derived
+ *    from this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS ``AS IS'' AND ANY
+ * EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+ * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR
+ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
+ * OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
 
 #ifndef vtknvindex_irregular_volume_mapper_h
 #define vtknvindex_irregular_volume_mapper_h
 
-#include <cstdio>
+#include <set>
 #include <string>
 
 #include <nv/index/icamera.h>
@@ -39,19 +39,18 @@
 #include <nv/index/iviewport.h>
 
 #include "vtkCamera.h"
+#include "vtkIndeXRepresentationsModule.h"
 #include "vtkMultiProcessController.h"
 #include "vtkUnstructuredGridVolumeMapper.h"
 
-#include "vtknvindex_application.h"
 #include "vtknvindex_cluster_properties.h"
 #include "vtknvindex_colormap_utility.h"
 #include "vtknvindex_performance_values.h"
 #include "vtknvindex_scene.h"
 
-#include "vtkIndeXRepresentationsModule.h"
-
+class vtkBoundingBox;
 class vtknvindex_cluster_properties;
-class vtkPKdTree;
+class vtknvindex_instance;
 
 // The class vtknvindex_irregular_volume_mapper maps ParaView's data to NVIDIA IndeX's data
 // representations.
@@ -82,9 +81,6 @@ public:
   // Overriding from vtkUnstructuredGridVolumeMapper.
   void Render(vtkRenderer* ren, vtkVolume* vol) override;
 
-  // Load and setup NVIDIA IndeX library.
-  bool initialize_nvindex();
-
   // Prepare data for the importer.
   bool prepare_data();
 
@@ -97,12 +93,14 @@ public:
   // Cluster properties from Representation.
   void set_cluster_properties(vtknvindex_cluster_properties* cluster_properties);
 
-  // Set ParaView domain subdivision KD-Tree.
-  void set_domain_kdtree(vtkPKdTree* kd_tree);
+  // Set raw cuts (leaf node before merging) and associated ranks, used to reconstruct kd-tree.
+  void set_raw_cuts(const std::vector<vtkBoundingBox>& raw_cuts, const std::vector<int>& ranks);
+
+  void set_subregion_bounds(const vtkBoundingBox& bbox);
 
   // The CUDA code need to be updated on changes applied in the GUI.
-  void rtc_kernel_changed(
-    vtknvindex_rtc_kernels kernel, const void* params_buffer, mi::Uint32 buffer_size);
+  void rtc_kernel_changed(vtknvindex_rtc_kernels kernel, const std::string& kernel_program,
+    const void* params_buffer, mi::Uint32 buffer_size);
 
   // Returns true if NVIDIA IndeX is initialized by this mapper.
   bool is_mapper_initialized() { return m_is_mapper_initialized; }
@@ -119,14 +117,14 @@ public:
   // Initialize the mapper.
   bool initialize_mapper(vtkRenderer* ren, vtkVolume* vol);
 
+  // Set volume visibility
+  void set_visibility(bool visibility);
+
 private:
   vtknvindex_irregular_volume_mapper(const vtknvindex_irregular_volume_mapper&) = delete;
   void operator=(const vtknvindex_irregular_volume_mapper&) = delete;
 
   bool m_is_mapper_initialized;   // True if mapper is initialized.
-  bool m_is_index_initialized;    // True if index library is initialized.
-  bool m_is_viewer;               // True if this is viewer node.
-  bool m_is_nvindex_rank;         // True if this rank is running NVIDIA IndeX.
   bool m_is_data_prepared;        // True if all the data is ready for the importer.
   bool m_config_settings_changed; // When some parameter changed on the GUI.
   bool m_opacity_changed;         // True if volume opacity changed.
@@ -139,7 +137,6 @@ private:
   vtkMTimeType m_last_MTime;   // last MTime when volume was modified
   std::string m_prev_property; // volume property that was rendered.
 
-  vtknvindex_application m_application_context;        // NVIDIA IndeX application context.
   vtknvindex_scene m_scene;                            // NVIDIA IndeX scene.
   vtknvindex_cluster_properties* m_cluster_properties; // Cluster properties gathered from ParaView.
   vtknvindex_performance_values m_performance_values;  // Performance values logger.
@@ -147,11 +144,17 @@ private:
   vtkDataArray* m_scalar_array;                        // Scalar array containing actual data.
   vtknvindex_irregular_volume_data m_volume_data;      // Tetrahedral volume data.
 
-  vtkPKdTree* m_kd_tree; // ParaView domain subdivision.
+  std::vector<vtkBoundingBox> m_raw_cuts; // Raw cuts used to reconstruct kd-tree, optional.
+  std::vector<int> m_raw_cuts_ranks;      // Ranks associated with the raw cuts.
 
-  mi::Float64 m_whole_bounds[6]; // whole volume bounds.
+  std::set<std::string> m_data_array_warning_printed; // A warning was already printed for these
+
+  mi::Float64 m_subregion_bounds[6]; // bounds when using ordered compositing.
+  mi::Float64 m_whole_bounds[6];     // whole volume bounds.
 
   vtknvindex_rtc_params_buffer m_volume_rtc_kernel; // The CUDA code applied to the current volume.
+
+  vtknvindex_instance* m_index_instance; // global index instance pointer
 };
 
 #endif

@@ -53,7 +53,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 // ParaView includes
 #include <pqSMAdaptor.h>
 
-#include <assert.h>
+#include <cassert>
 
 namespace
 {
@@ -62,17 +62,17 @@ QIcon get_icon(int assoc)
   switch (assoc)
   {
     case vtkDataObject::POINT:
-      return QIcon(":/pqWidgets/Icons/pqPointData16.png");
+      return QIcon(":/pqWidgets/Icons/pqPointData.svg");
     case vtkDataObject::CELL:
-      return QIcon(":/pqWidgets/Icons/pqCellData16.png");
+      return QIcon(":/pqWidgets/Icons/pqCellData.svg");
     case vtkDataObject::FIELD:
-      return QIcon(":/pqWidgets/Icons/pqGlobalData16.png");
+      return QIcon(":/pqWidgets/Icons/pqGlobalData.svg");
     case vtkDataObject::VERTEX:
-      return QIcon(":/pqWidgets/Icons/pqPointData16.png");
+      return QIcon(":/pqWidgets/Icons/pqPointData.svg");
     case vtkDataObject::EDGE:
-      return QIcon(":/pqWidgets/Icons/pqEdgeCenterData16.png");
+      return QIcon(":/pqWidgets/Icons/pqEdgeCenterData.svg");
     case vtkDataObject::ROW:
-      return QIcon(":/pqWidgets/Icons/pqSpreadsheet16.png");
+      return QIcon(":/pqWidgets/Icons/pqSpreadsheet.svg");
     default:
       return QIcon();
   }
@@ -91,23 +91,18 @@ public:
   vtkSmartPointer<vtkSMProperty> Property;
   vtkSmartPointer<vtkSMDomain> Domain;
   vtkEventQtSlotConnect* Connection;
-  QString DomainName;
   QStringList UserStrings;
   bool MarkedForUpdate;
 };
 
-pqComboBoxDomain::pqComboBoxDomain(QComboBox* p, vtkSMProperty* prop, const QString& domainName)
+pqComboBoxDomain::pqComboBoxDomain(QComboBox* p, vtkSMProperty* prop, vtkSMDomain* domain)
   : QObject(p)
 {
   this->Internal = new pqInternal();
   this->Internal->Property = prop;
-  this->Internal->DomainName = domainName;
+  this->Internal->Domain = domain;
 
-  if (!domainName.isEmpty())
-  {
-    this->Internal->Domain = prop->GetDomain(domainName.toLocal8Bit().data());
-  }
-  else
+  if (!this->Internal->Domain)
   {
     // get domain
     vtkSMDomainIterator* iter = prop->NewDomainIterator();
@@ -176,11 +171,6 @@ vtkSMDomain* pqComboBoxDomain::getDomain() const
   return this->Internal->Domain;
 }
 
-const QString& pqComboBoxDomain::getDomainName() const
-{
-  return this->Internal->DomainName;
-}
-
 const QStringList& pqComboBoxDomain::getUserStrings() const
 {
   return this->Internal->UserStrings;
@@ -200,7 +190,7 @@ void pqComboBoxDomain::domainChanged()
 void pqComboBoxDomain::internalDomainChanged()
 {
   QComboBox* combo = qobject_cast<QComboBox*>(this->parent());
-  Q_ASSERT(combo != NULL);
+  assert(combo != NULL);
   if (!combo)
   {
     return;

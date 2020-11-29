@@ -40,6 +40,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "vtkSMPropertyHelper.h"
 #include "vtkSMRenderViewProxy.h"
 
+#include <cassert>
+
 namespace
 {
 
@@ -169,7 +171,7 @@ void pqCylinderPropertyWidget::placeWidget()
   }
 
   vtkSMNewWidgetRepresentationProxy* wdgProxy = this->widgetProxy();
-  Q_ASSERT(wdgProxy);
+  assert(wdgProxy);
 
   double scaleFactor = vtkSMPropertyHelper(wdgProxy, "PlaceFactor").GetAsDouble();
   pqAdjustBounds(bbox, scaleFactor);
@@ -183,7 +185,7 @@ void pqCylinderPropertyWidget::placeWidget()
 void pqCylinderPropertyWidget::resetBounds()
 {
   vtkSMNewWidgetRepresentationProxy* wdgProxy = this->widgetProxy();
-  Q_ASSERT(wdgProxy);
+  assert(wdgProxy);
 
   vtkBoundingBox bbox = this->dataBounds();
   if (!bbox.IsValid())
@@ -205,7 +207,7 @@ void pqCylinderPropertyWidget::resetBounds()
     vtkSMPropertyHelper(wdgProxy, "WidgetBounds").Set(bnds, 6);
     wdgProxy->UpdateProperty("WidgetBounds", true);
 
-    emit this->changeAvailable();
+    Q_EMIT this->changeAvailable();
     this->render();
   }
 }
@@ -252,7 +254,7 @@ void pqCylinderPropertyWidget::setAxis(double wx, double wy, double wz)
   double axis[3] = { wx, wy, wz };
   vtkSMPropertyHelper(wdgProxy, "Axis").Set(axis, 3);
   wdgProxy->UpdateVTKObjects();
-  emit this->changeAvailable();
+  Q_EMIT this->changeAvailable();
   this->render();
 }
 

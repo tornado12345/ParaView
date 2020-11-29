@@ -8,7 +8,7 @@ set(GMV_READER_TESTS
   GMVReaderInvalidFiles${suffix}.xml
 )
 
-if (PARAVIEW_BUILD_QT_GUI)
+if (PARAVIEW_USE_QT)
   set(_paraview_add_tests_default_test_data_target ParaViewData)
   ExternalData_Expand_Arguments(ParaViewData _
     "DATA{${CMAKE_CURRENT_SOURCE_DIR}/Data/GMV/,REGEX:.*}"
@@ -17,7 +17,7 @@ if (PARAVIEW_BUILD_QT_GUI)
     "DATA{${CMAKE_CURRENT_SOURCE_DIR}/Data/GMV/quadratic_cells/,REGEX:.*}")
 
   paraview_add_client_tests(
-    BASELINE_DIR ${PARAVIEW_TEST_BASELINE_DIR}
+    BASELINE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/Data/Baseline"
     TEST_SCRIPTS ${GMV_READER_TESTS}
     TEST_DATA_TARGET ParaViewData
     LOAD_PLUGIN "GMVReader"
@@ -27,7 +27,7 @@ if (PARAVIEW_BUILD_QT_GUI)
       PASS_REGULAR_EXPRESSION "client0 process exited with code 0")
 
   paraview_add_client_server_tests(
-    BASELINE_DIR ${PARAVIEW_TEST_BASELINE_DIR}
+    BASELINE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/Data/Baseline"
     TEST_SCRIPTS ${GMV_READER_TESTS}
     TEST_DATA_TARGET ParaViewData
     LOAD_PLUGIN "GMVReader"

@@ -146,7 +146,7 @@ public:
    */
   QString categoryLabel(const QString& category);
 
-public slots:
+public Q_SLOTS:
   /**
   * Load a configuration XML. It will find the elements with resourceTagName
   * in the XML and populate the menu accordingly. Applications do not need to
@@ -179,9 +179,9 @@ public slots:
   * Forces a re-population of the menu. Any need to call this only after
   * addProxy() has been used to explicitly add entries.
   */
-  void populateMenu();
+  virtual void populateMenu();
 
-signals:
+Q_SIGNALS:
   void triggered(const QString& group, const QString& name);
 
   /**
@@ -190,7 +190,7 @@ signals:
   */
   void menuPopulated();
 
-protected slots:
+protected Q_SLOTS:
   void triggered();
   void quickLaunch();
   void switchActiveServer();

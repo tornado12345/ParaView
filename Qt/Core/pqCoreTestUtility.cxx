@@ -44,6 +44,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "QtTestingConfigure.h"
 
+#include "QVTKOpenGLNativeWidget.h"
+#include "QVTKOpenGLStereoWidget.h"
 #include "pqApplicationCore.h"
 #include "pqCollaborationEventPlayer.h"
 #include "pqColorButtonEventPlayer.h"
@@ -63,7 +65,9 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "pqQVTKWidget.h"
 #include "pqQVTKWidgetEventPlayer.h"
 #include "pqQVTKWidgetEventTranslator.h"
+#include "pqServer.h"
 #include "pqServerManagerModel.h"
+#include "pqUndoStack.h"
 #include "pqView.h"
 #include "pqXMLEventObserver.h"
 #include "pqXMLEventSource.h"
@@ -77,9 +81,11 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "vtkPNGWriter.h"
 #include "vtkPNMWriter.h"
 #include "vtkPVConfig.h"
+#include "vtkPVServerInformation.h"
 #include "vtkProcessModule.h"
 #include "vtkRenderWindow.h"
 #include "vtkSMPropertyHelper.h"
+#include "vtkSMViewLayoutProxy.h"
 #include "vtkSMViewProxy.h"
 #include "vtkSmartPointer.h"
 #include "vtkTIFFWriter.h"
@@ -87,6 +93,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "vtkTrivialProducer.h"
 #include "vtkWindowToImageFilter.h"
 #include "vtksys/SystemTools.hxx"
+
+#include <cassert>
 
 #ifdef QT_TESTING_WITH_PYTHON
 #include "pqPythonEventSourceImage.h"
@@ -241,20 +249,28 @@ bool pqCoreTestUtility::SaveScreenshot(vtkRenderWindow* RenderWindow, const QStr
 }
 
 //-----------------------------------------------------------------------------
-bool pqCoreTestUtility::CompareImage(vtkRenderWindow* RenderWindow, const QString& ReferenceImage,
-  double Threshold, ostream& vtkNotUsed(Output), const QString& TempDirectory)
+bool pqCoreTestUtility::CompareImage(vtkRenderWindow* renderWindow, const QString& referenceImage,
+  double threshold, ostream& vtkNotUsed(output), const QString& tempDirectory, const QSize& size)
 {
+  // Store the original size
+  int originalSize[2];
+  int* tmpSize = renderWindow->GetSize();
+  originalSize[0] = tmpSize[0];
+  originalSize[1] = tmpSize[1];
+  if (size.isValid() && !size.isEmpty())
+  {
+    renderWindow->SetSize(size.width(), size.height());
+  }
+
   vtkSmartPointer<vtkTesting> testing = vtkSmartPointer<vtkTesting>::New();
   testing->AddArgument("-T");
-  testing->AddArgument(TempDirectory.toLocal8Bit().data());
+  testing->AddArgument(tempDirectory.toLocal8Bit().data());
   testing->AddArgument("-V");
-  testing->AddArgument(ReferenceImage.toLocal8Bit().data());
-  testing->SetRenderWindow(RenderWindow);
-  if (testing->RegressionTest(Threshold) == vtkTesting::PASSED)
-  {
-    return true;
-  }
-  return false;
+  testing->AddArgument(referenceImage.toLocal8Bit().data());
+  testing->SetRenderWindow(renderWindow);
+  bool ret = testing->RegressionTest(threshold) == vtkTesting::PASSED;
+  renderWindow->SetSize(originalSize);
+  return ret;
 }
 
 //-----------------------------------------------------------------------------
@@ -280,7 +296,7 @@ bool pqCoreTestUtility::CompareImage(QWidget* widget, const QString& referenceIm
   double threshold, ostream& vtkNotUsed(output), const QString& tempDirectory,
   const QSize& size /*=QSize(300, 300)*/)
 {
-  Q_ASSERT(widget != NULL);
+  assert(widget != NULL);
 
   // try to locate a pqView, if any associated with the QWidget.
   QList<pqView*> views =
@@ -294,6 +310,41 @@ bool pqCoreTestUtility::CompareImage(QWidget* widget, const QString& referenceIm
     }
   }
 
+  // try to recover the render window directly
+  QVTKOpenGLStereoWidget* glWidget = qobject_cast<QVTKOpenGLStereoWidget*>(widget);
+  if (glWidget)
+  {
+    vtkRenderWindow* rw = glWidget->renderWindow();
+    if (rw)
+    {
+      cout << "Using QVTKOpenGLStereoWidget RenderWindow API for capture" << endl;
+      return pqCoreTestUtility::CompareImage(
+        rw, referenceImage, threshold, std::cerr, tempDirectory, size);
+    }
+  }
+  QVTKOpenGLNativeWidget* nativeWidget = qobject_cast<QVTKOpenGLNativeWidget*>(widget);
+  if (nativeWidget)
+  {
+    vtkRenderWindow* rw = nativeWidget->renderWindow();
+    if (rw)
+    {
+      cout << "Using QVTKOpenGLNativeWidget RenderWindow API for capture" << endl;
+      return pqCoreTestUtility::CompareImage(
+        rw, referenceImage, threshold, std::cerr, tempDirectory, size);
+    }
+  }
+
+  if (pqQVTKWidget* const qvtkWidget = qobject_cast<pqQVTKWidget*>(widget))
+  {
+    vtkRenderWindow* rw = qvtkWidget->renderWindow();
+    if (rw)
+    {
+      cout << "Using QVTKOpenGLNativeWidget RenderWindow API for capture" << endl;
+      return pqCoreTestUtility::CompareImage(
+        rw, referenceImage, threshold, std::cerr, tempDirectory, size);
+    }
+  }
+
   qFatal("CompareImage not supported!");
   return false;
 }
@@ -302,7 +353,9 @@ bool pqCoreTestUtility::CompareImage(QWidget* widget, const QString& referenceIm
 bool pqCoreTestUtility::CompareView(pqView* curView, const QString& referenceImage,
   double threshold, const QString& tempDirectory, const QSize& size /*=QSize()*/)
 {
-  Q_ASSERT(curView != NULL);
+  assert(curView != NULL);
+
+  SCOPED_UNDO_EXCLUDE();
 
   auto viewProxy = curView->getViewProxy();
 
@@ -399,4 +452,60 @@ bool pqCoreTestUtility::CompareImage(const QString& testPNGImage, const QString&
   reader->Update();
   return pqCoreTestUtility::CompareImage(
     reader->GetOutput(), referenceImage, threshold, output, tempDirectory);
+}
+
+//-----------------------------------------------------------------------------
+QString pqCoreTestUtility::fixPath(const QString& path)
+{
+  QString newpath = path;
+  newpath.replace("$PARAVIEW_TEST_ROOT", pqCoreTestUtility::TestDirectory());
+  newpath.replace("$PARAVIEW_TEST_BASELINE_DIR", pqCoreTestUtility::BaselineDirectory());
+  newpath.replace("$PARAVIEW_DATA_ROOT", pqCoreTestUtility::DataRoot());
+  return newpath;
+}
+
+//-----------------------------------------------------------------------------
+bool pqCoreTestUtility::CompareTile(QWidget* widget, int rank, int tdx, int tdy,
+  const QString& baseline, double threshold, ostream& output, const QString& tempDirectory)
+{
+  // try to locate a pqView, if any associated with the QWidget.
+  auto views = pqApplicationCore::instance()->getServerManagerModel()->findItems<pqView*>();
+  for (pqView* view : views)
+  {
+    if (view && (view->widget() == widget))
+    {
+      return pqCoreTestUtility::CompareTile(
+        view, rank, tdx, tdy, baseline, threshold, output, tempDirectory);
+    }
+  }
+
+  qFatal("CompareTile not supported on the provided widget");
+  return false;
+}
+
+//-----------------------------------------------------------------------------
+bool pqCoreTestUtility::CompareTile(pqView* view, int rank, int tdx, int tdy,
+  const QString& baseline, double threshold, ostream& output, const QString& tempDirectory)
+{
+  auto layout = view ? vtkSMViewLayoutProxy::FindLayout(view->getViewProxy()) : nullptr;
+  if (!layout)
+  {
+    return false;
+  }
+
+  if (tdx >= 1 && tdy >= 1)
+  {
+    auto serverInfo = view->getServer()->getServerInformation();
+    if (!serverInfo || serverInfo->GetTileDimensions()[0] != tdx ||
+      serverInfo->GetTileDimensions()[1] != tdy)
+    {
+      // skip compare.
+      return true;
+    }
+  }
+
+  const QString imagepath =
+    QString("%1/tile-%2.png").arg(tempDirectory).arg(QFileInfo(baseline).baseName());
+  layout->SaveAsPNG(rank, imagepath.toLocal8Bit().data());
+  return pqCoreTestUtility::CompareImage(imagepath, baseline, threshold, output, tempDirectory);
 }

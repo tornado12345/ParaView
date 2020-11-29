@@ -7,13 +7,13 @@ set(classes
 
 set(private_classes
   vtknvindex_affinity
-  vtknvindex_application
   vtknvindex_clock_pulse_generator
   vtknvindex_cluster_properties
   vtknvindex_colormap_utility
   vtknvindex_config_settings
   vtknvindex_forwarding_logger
   vtknvindex_host_properties
+  vtknvindex_instance
   vtknvindex_irregular_volume_importer
   vtknvindex_opengl_app_buffer
   vtknvindex_opengl_canvas
@@ -24,8 +24,7 @@ set(private_classes
   #vtknvindex_rtc_kernel_params
   vtknvindex_scene
   vtknvindex_sparse_volume_importer
-  vtknvindex_volume_compute
-  vtknvindex_volume_importer)
+  vtknvindex_volume_compute)
 
 set(sources)
 set(private_headers
@@ -37,6 +36,7 @@ set(kernel_sources
   kernel_irregular_isosurface.cu
   kernel_depth_enhancement.cu
   kernel_edge_enhancement.cu
+  kernel_gradient.cu
   kernel_isosurface.cu
   kernel_plane_surface_mapping.cu)
 set(kernel_string_sources)
@@ -71,7 +71,7 @@ vtk_module_add_module(pvNVIDIAIndeX::IndeXRepresentations
   PRIVATE_HEADERS ${private_headers})
 vtk_module_include(pvNVIDIAIndeX::IndeXRepresentations
   PUBLIC
-    ${NVINDEX_INCLUDE_DIRS})
+    $<BUILD_INTERFACE:${NVINDEX_INCLUDE_DIRS}>)
 
 if (NVINDEX_SKIP_BUILD_RPATH)
   vtk_module_set_properties(pvNVIDIAIndeX::IndeXRepresentations

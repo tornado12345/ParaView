@@ -44,6 +44,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "pqSelectionManager.h"
 #include "pqServerManagerModel.h"
 #include "pqSetName.h"
+#include "pqTabbedMultiViewWidget.h"
 #include "pqUndoStack.h"
 #include "vtkDataObject.h"
 #include "vtkNew.h"
@@ -70,6 +71,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <QPair>
 #include <QWidget>
 
+#include <cassert>
+
 namespace
 {
 // converts array association/name pair to QVariant.
@@ -91,7 +94,7 @@ QPair<int, QString> convert(const QVariant& val)
   if (val.canConvert<QStringList>())
   {
     QStringList list = val.toStringList();
-    Q_ASSERT(list.size() == 2);
+    assert(list.size() == 2);
     result.first = list[0].toInt();
     result.second = list[1];
   }
@@ -328,6 +331,16 @@ void pqPipelineContextMenuBehavior::buildMenu(pqDataRepresentation* repr, unsign
 
   // when nothing was picked we show the "link camera" menu.
   this->Menu->addAction("Link Camera...", view, SLOT(linkToOtherView()));
+
+  if (auto tmvwidget = qobject_cast<pqTabbedMultiViewWidget*>(
+        pqApplicationCore::instance()->manager("MULTIVIEW_WIDGET")))
+  {
+    auto actn = this->Menu->addAction("Show Frame Decorations");
+    actn->setCheckable(true);
+    actn->setChecked(tmvwidget->decorationsVisibility());
+    QObject::connect(
+      actn, &QAction::triggered, tmvwidget, &pqTabbedMultiViewWidget::setDecorationsVisibility);
+  }
 }
 
 //-----------------------------------------------------------------------------
@@ -337,14 +350,17 @@ void pqPipelineContextMenuBehavior::buildColorFieldsMenu(
   QObject::connect(menu, SIGNAL(triggered(QAction*)), this, SLOT(colorMenuTriggered(QAction*)),
     Qt::QueuedConnection);
 
-  QIcon cellDataIcon(":/pqWidgets/Icons/pqCellData16.png");
-  QIcon pointDataIcon(":/pqWidgets/Icons/pqPointData16.png");
-  QIcon solidColorIcon(":/pqWidgets/Icons/pqSolidColor16.png");
+  QIcon cellDataIcon(":/pqWidgets/Icons/pqCellData.svg");
+  QIcon pointDataIcon(":/pqWidgets/Icons/pqPointData.svg");
+  QIcon solidColorIcon(":/pqWidgets/Icons/pqSolidColor.svg");
 
   menu->addAction(solidColorIcon, "Solid Color")->setData(convert(QPair<int, QString>()));
   vtkSMProperty* prop = pipelineRepr->getProxy()->GetProperty("ColorArrayName");
-  vtkSMArrayListDomain* domain =
-    prop ? vtkSMArrayListDomain::SafeDownCast(prop->FindDomain("vtkSMArrayListDomain")) : NULL;
+  if (!prop)
+  {
+    return;
+  }
+  auto domain = prop->FindDomain<vtkSMArrayListDomain>();
   if (!domain)
   {
     return;

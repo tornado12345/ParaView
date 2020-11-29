@@ -40,6 +40,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "pqInterfaceTracker.h"
 #include "pqObjectBuilder.h"
 #include "pqPropertyLinks.h"
+#include "pqQVTKWidget.h"
 #include "pqServerManagerModel.h"
 #include "pqUndoStack.h"
 #include "pqView.h"
@@ -48,6 +49,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "vtkCommand.h"
 #include "vtkErrorCode.h"
 #include "vtkImageData.h"
+#include "vtkLogger.h"
 #include "vtkNew.h"
 #include "vtkSMParaViewPipelineControllerWithRendering.h"
 #include "vtkSMProperty.h"
@@ -103,6 +105,8 @@ public:
 
   pqPropertyLinks Links;
 
+  double CustomDevicePixelRatio = 0.0;
+
   pqInternals(pqMultiViewWidget* self)
     : Popout(false)
     , SavedButtons(pqViewFrame::NoButton)
@@ -132,6 +136,8 @@ public:
     ui.setupUi(this->PopoutPlaceholder.data());
     QObject::connect(
       ui.restoreButton, &QPushButton::clicked, [self](bool) { self->togglePopout(); });
+
+    this->CustomDevicePixelRatio = 0.0;
   }
 
   ~pqInternals()
@@ -195,10 +201,11 @@ public:
 
   void preview(const QSize& size)
   {
+    vtkLogScopeF(TRACE, "preview (%d, %d)", size.width(), size.height());
     this->PreviewSize = size;
     if (size.isEmpty())
     {
-      this->setDecorationsVisibility(true);
+      this->setCustomDevicePixelRatio(0.0); // set to 0 to not use custom value.
       this->Container->setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
       this->Container->layout()->setSpacing(PARAVIEW_DEFAULT_LAYOUT_SPACING);
 
@@ -207,7 +214,6 @@ public:
     }
     else
     {
-      this->setDecorationsVisibility(false);
       this->Container->layout()->setSpacing(this->PreviewSpacing);
       auto palette = this->Container->palette();
       palette.setColor(QPalette::Window, this->PreviewColor);
@@ -218,24 +224,51 @@ public:
       vtkVector2i tsize(size.width(), size.height());
       const QRect crect = this->Container->parentWidget()->contentsRect();
       vtkVector2i csize(crect.width(), crect.height());
-      vtkSMSaveScreenshotProxy::ComputeMagnification(tsize, csize);
+      const int magnification = vtkSMSaveScreenshotProxy::ComputeMagnification(tsize, csize);
+      this->setCustomDevicePixelRatio(magnification);
       this->Container->setMaximumSize(csize[0], csize[1]);
+      vtkLogF(
+        TRACE, "cur=(%d, %d), new=(%d, %d)", crect.width(), crect.height(), csize[0], csize[1]);
+    }
+    this->updateDecorations();
+  }
+
+  const QSize& previewSize() const { return this->PreviewSize; }
+
+  void setCustomDevicePixelRatio(double sf)
+  {
+    if (this->CustomDevicePixelRatio != sf)
+    {
+      this->CustomDevicePixelRatio = sf;
+      for (auto renderWidget : this->Container->findChildren<pqQVTKWidget*>())
+      {
+        renderWidget->setCustomDevicePixelRatio(sf);
+        // need to disable font-scaling if custom ratio is being used.
+        renderWidget->setEnableHiDPI(sf == 0.0 ? true : false);
+      }
     }
   }
 
   void setDecorationsVisibility(bool val)
   {
     this->DecorationsVisibility = val;
+    this->updateDecorations();
+  }
+
+  bool decorationsVisibility() const { return this->DecorationsVisibility; }
+
+  void updateDecorations()
+  {
+    // we show decorations if explicitly requested *and* we're not in preview mode.
+    const bool showDecorations = this->DecorationsVisibility && this->PreviewSize.isEmpty();
     for (auto iter = this->ViewFrames.begin(); iter != this->ViewFrames.end(); ++iter)
     {
       if (iter.value() != nullptr)
       {
-        iter.value()->setDecorationsVisibility(val);
+        iter.value()->setDecorationsVisibility(showDecorations);
       }
     }
   }
-
-  bool decorationsVisibility() const { return this->DecorationsVisibility; }
 
   void lockViewSize(const QSize& size)
   {
@@ -277,7 +310,7 @@ pqView* getPQView(vtkSMProxy* view)
 
 void ConnectFrameToView(pqViewFrame* frame, pqView* pqview)
 {
-  Q_ASSERT(frame);
+  assert(frame);
   // if pqview == NULL, then the frame is either being assigned to a empty
   // view, or pqview for a view-proxy just isn't present yet.
   // it's possible that pqview is NULL, if the view proxy hasn't been registered
@@ -362,12 +395,19 @@ void pqMultiViewWidget::setLayoutManager(vtkSMViewLayoutProxy* vlayout)
         vlayout->AddObserver(vtkCommand::ConfigureEvent, this, &pqMultiViewWidget::reload));
       internals.ObserverIds.push_back(vlayout->AddObserver(
         vtkCommand::PropertyModifiedEvent, this, &pqMultiViewWidget::layoutPropertyModified));
+
+      // explicitly call `layoutPropertyModified` for all properties we care
+      // about to ensure our state is initialized to the current values from the
+      // layout proxy.
       this->layoutPropertyModified(
         vlayout, vtkCommand::PropertyModifiedEvent, const_cast<char*>("SeparatorWidth"));
       this->layoutPropertyModified(
         vlayout, vtkCommand::PropertyModifiedEvent, const_cast<char*>("SeparatorColor"));
+      this->layoutPropertyModified(
+        vlayout, vtkCommand::PropertyModifiedEvent, const_cast<char*>("PreviewMode"));
     }
   }
+
   // we delay the setting of the LayoutManager to avoid the duplicate `reload`
   // call when `addPropertyLink` is called if the window decorations
   // visibility changed.
@@ -385,12 +425,12 @@ vtkSMViewLayoutProxy* pqMultiViewWidget::layoutManager() const
 void pqMultiViewWidget::layoutPropertyModified(
   vtkObject* sender, unsigned long eventid, void* vdata)
 {
-  Q_ASSERT(eventid == vtkCommand::PropertyModifiedEvent);
+  assert(eventid == vtkCommand::PropertyModifiedEvent);
   Q_UNUSED(eventid);
 
   auto& internals = (*this->Internals);
   auto vlayout = vtkSMViewLayoutProxy::SafeDownCast(sender);
-  Q_ASSERT(vlayout);
+  assert(vlayout);
   if (const char* pname = reinterpret_cast<const char*>(vdata))
   {
     if (strcmp(pname, "SeparatorWidth") == 0)
@@ -443,6 +483,18 @@ bool pqMultiViewWidget::eventFilter(QObject* caller, QEvent* evt)
 }
 
 //-----------------------------------------------------------------------------
+void pqMultiViewWidget::resizeEvent(QResizeEvent* evt)
+{
+  this->Superclass::resizeEvent(evt);
+  auto& internals = (*this->Internals);
+  const auto& psize = internals.previewSize();
+  if (!psize.isEmpty())
+  {
+    internals.preview(psize);
+  }
+}
+
+//-----------------------------------------------------------------------------
 void pqMultiViewWidget::proxyRemoved(pqProxy* proxy)
 {
   vtkSMViewProxy* view = vtkSMViewProxy::SafeDownCast(proxy->getProxy());
@@ -450,21 +502,6 @@ void pqMultiViewWidget::proxyRemoved(pqProxy* proxy)
   {
     this->layoutManager()->RemoveView(view);
   }
-}
-
-//-----------------------------------------------------------------------------
-void pqMultiViewWidget::assignToFrame(pqView* view)
-{
-  if (this->layoutManager() && view)
-  {
-    int active_index = 0;
-    if (this->Internals->ActiveFrame)
-    {
-      active_index = this->Internals->ActiveFrame->property("FRAME_INDEX").toInt();
-    }
-    this->layoutManager()->AssignViewToAnyCell(view->getViewProxy(), active_index);
-  }
-  pqActiveObjects::instance().setActiveView(view);
 }
 
 //-----------------------------------------------------------------------------
@@ -517,7 +554,7 @@ void pqMultiViewWidget::markActive(pqViewFrame* frame)
     frame->setBorderVisibility(true);
     // indicate to the world that a frame on this widget has been activated.
     // pqTabbedMultiViewWidget listens to this signal to raise that tab.
-    emit this->frameActivated();
+    Q_EMIT this->frameActivated();
     // NOTE: this signal will result in call to makeFrameActive().
   }
 }
@@ -584,7 +621,7 @@ void pqMultiViewWidget::reload()
 
   auto& internals = (*this->Internals);
   auto hlayout = qobject_cast<pqHierarchicalGridLayout*>(internals.Container->layout());
-  Q_ASSERT(hlayout != nullptr);
+  assert(hlayout != nullptr);
 
   internals.Frames.clear();
 
@@ -624,7 +661,7 @@ void pqMultiViewWidget::reload()
     {
       auto viewProxy = vlayout->GetView(location); // may be nullptr.
       auto frame = internals.ViewFrames.value(viewProxy, nullptr);
-      Q_ASSERT(viewProxy == nullptr || frame != nullptr);
+      assert(viewProxy == nullptr || frame != nullptr);
       if (viewProxy == nullptr && frame == nullptr)
       {
         if (empty_frames.size() > 0)
@@ -690,10 +727,17 @@ void pqMultiViewWidget::reload()
   // let's make sure maximum size on all `pqViewFrame`s is set correctly.
   internals.lockViewSize(internals.lockedSize());
 
-  // // we let the GUI updated immediately. This is needed since when a new view is
-  // // created (for example), it may depend on the size of the view during its
-  // // initialization to ensure camera is reset correctly.
-  QCoreApplication::sendPostedEvents();
+  // post reload, the active frames may have changed.
+  // so we ensure we mark the right one active.
+  this->markActive(pqActiveObjects::instance().activeView());
+
+  // we let the GUI updated immediately. This is needed since when a new view is
+  // created (for example), it may depend on the size of the view during its
+  // initialization to ensure camera is reset correctly.
+  // We have gone back and forth between whether we should let the qt app
+  // process events on just process posted events. Calling `processEvents` was
+  // finally chosen to address issues like paraview/paraview#18963.
+  pqEventDispatcher::processEvents();
 }
 
 //-----------------------------------------------------------------------------
@@ -779,17 +823,37 @@ void pqMultiViewWidget::destroyAllViews()
 }
 
 //-----------------------------------------------------------------------------
+#if !defined(VTK_LEGACY_REMOVE)
 void pqMultiViewWidget::setDecorationsVisible(bool val)
+{
+  VTK_LEGACY_REPLACED_BODY(pqMultiViewWidget::setDecorationsVisible, "ParaView 5.7",
+    pqMultiViewWidget::setDecorationsVisibility);
+  this->setDecorationsVisibility(val);
+}
+#endif
+
+//-----------------------------------------------------------------------------
+void pqMultiViewWidget::setDecorationsVisibility(bool val)
 {
   auto& internals = (*this->Internals);
   internals.setDecorationsVisibility(val);
-  emit this->decorationsVisibilityChanged(val);
+  Q_EMIT this->decorationsVisibilityChanged(val);
 }
 
 //-----------------------------------------------------------------------------
+#if !defined(VTK_LEGACY_REMOVE)
 bool pqMultiViewWidget::isDecorationsVisible() const
 {
-  const auto& internals = (*this->Internals);
+  VTK_LEGACY_REPLACED_BODY(pqMultiViewWidget::isDecorationsVisible, "ParaView 5.7",
+    pqMultiViewWidget::decorationsVisibility);
+  return this->decorationsVisibility();
+}
+#endif
+
+//-----------------------------------------------------------------------------
+bool pqMultiViewWidget::decorationsVisibility() const
+{
+  auto& internals = (*this->Internals);
   return internals.decorationsVisibility();
 }
 
@@ -880,7 +944,7 @@ bool pqMultiViewWidget::togglePopout()
   }
   else
   {
-    Q_ASSERT(internals.PopoutWindow != nullptr);
+    assert(internals.PopoutWindow != nullptr);
     internals.PopoutWindow->hide();
     internals.PopoutWindow->layout()->removeWidget(internals.Container);
 
@@ -916,4 +980,14 @@ QSize pqMultiViewWidget::preview(const QSize& nsize)
     vlayout->UpdateVTKObjects();
   }
   return this->Internals->Container->maximumSize();
+}
+
+//-----------------------------------------------------------------------------
+int pqMultiViewWidget::activeFrameLocation() const
+{
+  if (auto frame = this->Internals->ActiveFrame)
+  {
+    return frame->property("FRAME_INDEX").toInt();
+  }
+  return -1;
 }

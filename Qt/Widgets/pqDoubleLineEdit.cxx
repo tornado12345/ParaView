@@ -121,6 +121,7 @@ public:
   {
     if (this->InactiveLineEdit)
     {
+      this->InactiveLineEdit->setEnabled(self->isEnabled());
       this->InactiveLineEdit->render(self, self->mapTo(self->window(), QPoint(0, 0)));
     }
   }
@@ -291,4 +292,18 @@ QString pqDoubleLineEdit::formatDouble(
   converter << value;
 
   return text;
+}
+
+//-----------------------------------------------------------------------------
+QString pqDoubleLineEdit::formatDouble(
+  double value, pqDoubleLineEdit::RealNumberNotation notation, int precision)
+{
+  return pqDoubleLineEdit::formatDouble(value, toTextStreamNotation(notation), precision);
+}
+
+//-----------------------------------------------------------------------------
+QString pqDoubleLineEdit::formatDoubleUsingGlobalPrecisionAndNotation(double value)
+{
+  return pqDoubleLineEdit::formatDouble(
+    value, pqDoubleLineEdit::globalNotation(), pqDoubleLineEdit::globalPrecision());
 }

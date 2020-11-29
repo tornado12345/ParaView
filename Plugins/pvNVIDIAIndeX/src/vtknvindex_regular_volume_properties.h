@@ -1,53 +1,48 @@
-/* Copyright 2018 NVIDIA Corporation. All rights reserved.
-*
-* Redistribution and use in source and binary forms, with or without
-* modification, are permitted provided that the following conditions
-* are met:
-*  * Redistributions of source code must retain the above copyright
-*    notice, this list of conditions and the following disclaimer.
-*  * Redistributions in binary form must reproduce the above copyright
-*    notice, this list of conditions and the following disclaimer in the
-*    documentation and/or other materials provided with the distribution.
-*  * Neither the name of NVIDIA CORPORATION nor the names of its
-*    contributors may be used to endorse or promote products derived
-*    from this software without specific prior written permission.
-*
-* THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS ``AS IS'' AND ANY
-* EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-* IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
-* PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR
-* CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
-* EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
-* PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
-* PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
-* OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-* (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-* OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-*/
+/* Copyright 2020 NVIDIA Corporation. All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *  * Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ *  * Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *  * Neither the name of NVIDIA CORPORATION nor the names of its
+ *    contributors may be used to endorse or promote products derived
+ *    from this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS ``AS IS'' AND ANY
+ * EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+ * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR
+ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
+ * OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
 
 #ifndef vtknvindex_regular_volume_properties_h
 #define vtknvindex_regular_volume_properties_h
 
 #include <string>
 
-#include <mi/base/interface_implement.h>
 #include <mi/math/bbox.h>
+#include <mi/neuraylib/dice.h>
+
+#include "vtkDataArray.h"
 
 class vtknvindex_host_properties;
 struct vtknvindex_irregular_volume_data;
-
-class vtknvindex_regular_volume_properties_base
-  : public mi::base::Interface_declare<0x18c04ecc, 0x0296, 0x42af, 0xa4, 0x1d, 0x35, 0xe1, 0x7e,
-      0x46, 0x2d, 0x9b>
-{
-};
+class vtkUnstructuredGridBase;
 
 // The class vtknvindex_regular_volume_properties represents the complementary
 // regular volume dataset information such as dimension, data type, time steps, etc.
 class vtknvindex_regular_volume_properties
-  : public mi::base::Interface_implement<vtknvindex_regular_volume_properties_base>
 {
-
 public:
   vtknvindex_regular_volume_properties();
   ~vtknvindex_regular_volume_properties();
@@ -76,6 +71,10 @@ public:
   void set_ivol_volume_extents(mi::math::Bbox<mi::Float32, 3> volume_extents);
   void get_ivol_volume_extents(mi::math::Bbox<mi::Float32, 3>& volume_extents) const;
 
+  // Number of VTK ghost level (distinct from IndeX border size settings)
+  void set_ghost_levels(mi::Sint32 ghost_levels);
+  mi::Sint32 get_ghost_levels() const;
+
   // Translation, Scaling.
   void set_volume_translation(mi::math::Vector<mi::Float32, 3> translation);
   void get_volume_translation(mi::math::Vector<mi::Float32, 3>& translation) const;
@@ -101,19 +100,22 @@ public:
 
   // Write given volume data to shared memory.
   bool write_shared_memory(vtkDataArray* scalar_array, mi::Sint32* bounds,
-    vtknvindex_host_properties* host_properties, mi::Uint32 current_timestep, bool is_MPI);
+    vtknvindex_host_properties* host_properties, mi::Uint32 current_timestep, bool use_shared_mem);
 
   // Write irregular volume data to shared memory.
   bool write_shared_memory(vtknvindex_irregular_volume_data* ivol_data,
-    vtknvindex_host_properties* host_properties, mi::Uint32 current_timestep);
+    vtkUnstructuredGridBase* ugrid, vtknvindex_host_properties* host_properties,
+    mi::Uint32 current_timestep);
 
   void print_info() const;
 
-  // DiCE database element methods.
-  virtual void serialize(mi::neuraylib::ISerializer* serializer) const;
-  virtual void deserialize(mi::neuraylib::IDeserializer* deserializer);
-  virtual mi::base::Uuid get_class_id() const;
-  virtual const char* get_class_name() const;
+  // Serialization
+  void serialize(mi::neuraylib::ISerializer* serializer) const;
+  void deserialize(mi::neuraylib::IDeserializer* deserializer);
+
+  // Returns size of a voxel in memory for the given scalar type, or 0 if the type is invalid or not
+  // supported by NVIDIA IndeX.
+  static mi::Size get_scalar_size(const std::string& scalar_type);
 
 private:
   vtknvindex_regular_volume_properties(const vtknvindex_regular_volume_properties&) = delete;
@@ -137,6 +139,8 @@ private:
   mi::math::Vector_struct<mi::Uint32, 3> m_volume_size;  // Entire volume size.
   mi::math::Vector<mi::Float32, 3> m_volume_translation; // Volume translation.
   mi::math::Vector<mi::Float32, 3> m_volume_scaling;     // Volume scaling.
+
+  mi::Sint32 m_ghost_levels; // VTK ghost levels
 };
 
 #endif

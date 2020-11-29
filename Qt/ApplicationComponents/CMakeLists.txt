@@ -35,7 +35,7 @@ set(classes
   pqAnimationShortcutDecorator
   pqAnimationShortcutWidget
   pqAnimationTimeToolbar
-  pqAnimationTimeWidget
+  pqAnnotationsModel
   pqApplicationComponentsInit
   pqApplicationSettingsReaction
   pqApplyBehavior
@@ -56,7 +56,6 @@ set(classes
   pqCatalystExportReaction
   pqCatalystPauseSimulationReaction
   pqCatalystRemoveBreakpointReaction
-  pqCatalystScriptGeneratorReaction
   pqCatalystSetBreakpointReaction
   pqCategoryToolbarsBehavior
   pqChangePipelineInputReaction
@@ -64,6 +63,7 @@ set(classes
   pqChooseColorPresetReaction
   pqCollaborationBehavior
   pqColorAnnotationsPropertyWidget
+  pqColorAnnotationsWidget
   pqColorEditorPropertyWidget
   pqColorMapEditor
   pqColorOpacityEditorWidget
@@ -79,8 +79,10 @@ set(classes
   pqCustomShortcutBehavior
   pqCustomizeShortcutsReaction
   pqCustomizeShortcutsDialog
+  pqCheckableProperty
   pqCustomViewpointsToolbar
   pqCylinderPropertyWidget
+  pqDataAssemblyPropertyWidget
   pqDataQueryReaction
   pqDataTimeStepBehavior
   pqDefaultMainWindow
@@ -95,6 +97,7 @@ set(classes
   pqExampleVisualizationsDialog
   pqExampleVisualizationsDialogReaction
   pqExportReaction
+  pqExtractorsMenuReaction
   pqFileNamePropertyWidget
   pqFiltersMenuReaction
   pqFontPropertyWidget
@@ -104,9 +107,9 @@ set(classes
   pqIgnoreSourceTimeReaction
   pqImageCompressorWidget
   pqImplicitPlanePropertyWidget
-  pqImportCinemaReaction
   pqInputDataTypeDecorator
   pqInteractivePropertyWidget
+  pqLightPropertyWidget
   pqLinePropertyWidget
   pqLinkSelectionReaction
   pqListPropertyWidget
@@ -118,6 +121,7 @@ set(classes
   pqLoadStateReaction
   pqLockPanelsBehavior
   pqLockPanelsReaction
+  pqLogViewerReaction
   pqMainControlsToolbar
   pqMainWindowEventBehavior
   pqManageCustomFiltersReaction
@@ -125,12 +129,14 @@ set(classes
   pqManageLinksReaction
   pqManagePluginsReaction
   pqMasterOnlyReaction
+  pqMenuReactionUtils
   pqModelTransformSupportBehavior
   pqMoleculePropertyWidget
   pqMultiComponentsDecorator
-  pqOSPRayHidingDecorator
   pqObjectPickingBehavior
+  pqOMETransferFunctionsPropertyWidget
   pqOpacityTableModel
+  pqOSPRayHidingDecorator
   pqPVAnimationWidget
   pqPVApplicationCore
   pqParaViewBehaviors
@@ -144,7 +150,7 @@ set(classes
   pqPluginToolBarBehavior
   pqPointPickingHelper
   pqPreviewMenuManager
-  pqPropertyGroupButton
+  pqPropertyCollectionWidget
   pqProxyGroupMenuManager
   pqReaction
   pqReloadFilesReaction
@@ -156,9 +162,11 @@ set(classes
   pqSaveAnimationGeometryReaction
   pqSaveAnimationReaction
   pqSaveDataReaction
+  pqSaveExtractsReaction
   pqSaveScreenshotReaction
   pqSaveStateReaction
   pqScalarBarVisibilityReaction
+  pqSearchItemReaction
   pqSelectionReaction
   pqSeriesEditorPropertyWidget
   pqServerConnectReaction
@@ -186,6 +194,7 @@ set(classes
   pqTransferFunctionWidgetPropertyWidget
   pqUndoRedoBehavior
   pqUndoRedoReaction
+  pqUsageLoggingBehavior
   pqUseSeparateColorMapReaction
   pqVCRToolbar
   pqVerifyRequiredPluginBehavior
@@ -196,25 +205,30 @@ set(classes
   pqWelcomeDialog
   pqYoungsMaterialPropertyWidget)
 
+set(built_shared 0)
+if (BUILD_SHARED_LIBS)
+  set(built_shared 1)
+endif ()
+set_property(SOURCE pqApplicationComponentsInit.cxx APPEND
+  PROPERTY
+    COMPILE_DEFINITIONS "BUILD_SHARED_LIBS=${built_shared}")
+
 set(headers
   pqCatalystContinueReaction.h)
 
 if (TARGET ParaView::pqPython)
   list(APPEND classes
-    pqCatalystExportInspector
     pqMacroReaction
     pqTraceReaction)
 endif ()
 
 set(ui_files
-  Resources/UI/pqAnimationTimeWidget.ui
   Resources/UI/pqAxesToolbar.ui
   Resources/UI/pqBackgroundEditorWidget.ui
   Resources/UI/pqBoxPropertyWidget.ui
   Resources/UI/pqCameraManipulatorWidget.ui
   Resources/UI/pqCameraToolbar.ui
-  Resources/UI/pqCatalystExportInspector.ui
-  Resources/UI/pqColorAnnotationsPropertyWidget.ui
+  Resources/UI/pqColorAnnotationsWidget.ui
   Resources/UI/pqColorEditorPropertyWidget.ui
   Resources/UI/pqColorMapEditor.ui
   Resources/UI/pqColorOpacityEditorWidget.ui
@@ -222,6 +236,7 @@ set(ui_files
   Resources/UI/pqCustomResolutionDialog.ui
   Resources/UI/pqCylinderPropertyWidget.ui
   Resources/UI/pqCustomizeShortcutsDialog.ui
+  Resources/UI/pqDataAssemblyPropertyWidget.ui
   Resources/UI/pqDefaultMainWindow.ui
   Resources/UI/pqDoubleRangeSliderPropertyWidget.ui
   Resources/UI/pqEditMenuBuilder.ui
@@ -232,9 +247,13 @@ set(ui_files
   Resources/UI/pqHandlePropertyWidget.ui
   Resources/UI/pqImageCompressorWidget.ui
   Resources/UI/pqImplicitPlanePropertyWidget.ui
+  Resources/UI/pqLightPropertyWidget.ui
   Resources/UI/pqLinePropertyWidget.ui
   Resources/UI/pqMainControlsToolbar.ui
   Resources/UI/pqMoleculePropertyWidget.ui
+  Resources/UI/pqOMETransferFunctionsPropertyWidget.ui
+  Resources/UI/pqOMETransferFunctionsPropertyWidgetPage.ui
+  Resources/UI/pqPropertyCollectionWidget.ui
   Resources/UI/pqResetScalarRangeToDataOverTime.ui
   Resources/UI/pqSavePresetOptions.ui
   Resources/UI/pqSeriesEditorPropertyWidget.ui
@@ -253,7 +272,9 @@ set(resource_files
   Resources/pqApplicationComponents.qrc)
 
 set(qt_components
-  Widgets)
+  Network
+  Widgets
+  Svg)
 
 if (PARAVIEW_USE_QTHELP)
   list(APPEND qt_components
@@ -286,7 +307,9 @@ vtk_module_add_module(ParaView::pqApplicationComponents
           ${resource_files})
 vtk_module_link(ParaView::pqApplicationComponents
   PRIVATE
-    Qt5::Widgets)
+    Qt5::Widgets
+    Qt5::Svg
+    Qt5::Network)
 if (PARAVIEW_USE_QTHELP)
   vtk_module_link(ParaView::pqApplicationComponents
     PRIVATE

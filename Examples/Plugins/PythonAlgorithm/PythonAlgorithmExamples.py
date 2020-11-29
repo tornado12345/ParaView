@@ -70,6 +70,44 @@ class PythonSuperquadricSource(VTKPythonAlgorithmBase):
         self._realAlgorithm.SetThickness(x)
         self.Modified()
 
+    # "ValueRangeInfo" and "Value" demonstrate how one can have a slider in the
+    # UI for a property with its range fetched at runtime. For int values,
+    # use `intvector` and `IntRangeDomain` instead of the double variants used
+    # below.
+    @smproperty.doublevector(name="ValueRangeInfo", information_only="1")
+    def GetValueRange(self):
+        print("getting range: (0, 100)")
+        return (0, 100)
+
+    @smproperty.doublevector(name="Value", default_values=[0.0])
+    @smdomain.xml(\
+        """<DoubleRangeDomain name="range" default_mode="mid">
+                <RequiredProperties>
+                    <Property name="ValueRangeInfo" function="RangeInfo" />
+                </RequiredProperties>
+           </DoubleRangeDomain>
+        """)
+    def SetValue(self, val):
+        print("settings value:", val)
+
+    # "StringInfo" and "String" demonstrate how one can add a selection widget
+    # that lets user choose a string from the list of strings.
+    @smproperty.stringvector(name="StringInfo", information_only="1")
+    def GetStrings(self):
+        return ["one", "two", "three"]
+
+    @smproperty.stringvector(name="String", number_of_elements="1")
+    @smdomain.xml(\
+        """<StringListDomain name="list">
+                <RequiredProperties>
+                    <Property name="StringInfo" function="StringInfo"/>
+                </RequiredProperties>
+            </StringListDomain>
+        """)
+    def SetString(self, value):
+        print("Setting ", value)
+
+
 
 
 #------------------------------------------------------------------------------
@@ -149,7 +187,6 @@ class PythonCSVReader(VTKPythonAlgorithmBase):
             return timesteps[0]
 
     def _get_array_selection(self):
-        self._get_raw_data()
         return self._arrayselection
 
     @smproperty.stringvector(name="FileName")
@@ -268,6 +305,35 @@ class ExampleTwoInputFilter(VTKPythonAlgorithmBase):
         # do work
         print("Pretend work done!")
         return 1
+
+@smproxy.filter()
+@smproperty.input(name="Input")
+@smdomain.datatype(dataTypes=["vtkDataSet"], composite_data_supported=False)
+class PreserveInputTypeFilter(VTKPythonAlgorithmBase):
+    """
+    Example filter demonstrating how to write a filter that preserves the input
+    dataset type.
+    """
+    def __init__(self):
+        super().__init__(nInputPorts=1, nOutputPorts=1, outputType="vtkDataSet")
+
+    def RequestDataObject(self, request, inInfo, outInfo):
+        inData = self.GetInputData(inInfo, 0, 0)
+        outData = self.GetOutputData(outInfo, 0)
+        assert inData is not None
+        if outData is None or (not outData.IsA(inData.GetClassName())):
+            outData = inData.NewInstance()
+            outInfo.GetInformationObject(0).Set(outData.DATA_OBJECT(), outData)
+        return super().RequestDataObject(request, inInfo, outInfo)
+
+    def RequestData(self, request, inInfo, outInfo):
+        inData = self.GetInputData(inInfo, 0, 0)
+        outData = self.GetOutputData(outInfo, 0)
+        print("input type =", inData.GetClassName())
+        print("output type =", outData.GetClassName())
+        assert outData.IsA(inData.GetClassName())
+        return 1
+
 
 def test_PythonSuperquadricSource():
     src = PythonSuperquadricSource()

@@ -1,17 +1,15 @@
-//*****************************************************************************
-// Copyright 2018 NVIDIA Corporation. All rights reserved.
-//*****************************************************************************
+/***************************************************************************************************
+ * Copyright 2020 NVIDIA Corporation. All rights reserved.
+ **************************************************************************************************/
 /// \file
 /// \brief Structure type.
-//*****************************************************************************
 
 #ifndef MI_NEURAYLIB_ISTRUCTURE_H
 #define MI_NEURAYLIB_ISTRUCTURE_H
 
 #include <mi/neuraylib/idata.h>
 
-namespace mi
-{
+namespace mi {
 
 class IStructure_decl;
 
@@ -40,12 +38,13 @@ class IStructure_decl;
 ///   the value in any way. Use #get_structure_decl() to obtain information about the type itself.
 ///
 /// \see #mi::IStructure_decl
-class IStructure : public base::Interface_declare<0xd23152f6, 0x5640, 0x4ea0, 0x8c, 0x59, 0x27,
-                     0x3e, 0xdf, 0xab, 0xd1, 0x8e, IData_collection>
+class IStructure :
+    public base::Interface_declare<0xd23152f6,0x5640,0x4ea0,0x8c,0x59,0x27,0x3e,0xdf,0xab,0xd1,0x8e,
+                                   IData_collection>
 {
 public:
-  /// Returns the structure declaration for this structure.
-  virtual const IStructure_decl* get_structure_decl() const = 0;
+    /// Returns the structure declaration for this structure.
+    virtual const IStructure_decl* get_structure_decl() const = 0;
 };
 
 /*@}*/ // end group mi_neuray_collections

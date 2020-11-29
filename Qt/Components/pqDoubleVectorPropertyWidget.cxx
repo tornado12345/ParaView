@@ -31,19 +31,24 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 =========================================================================*/
 #include "pqDoubleVectorPropertyWidget.h"
 
+#include "pqActiveObjects.h"
 #include "pqCoreUtilities.h"
 #include "pqDiscreteDoubleWidget.h"
 #include "pqDoubleLineEdit.h"
 #include "pqDoubleRangeWidget.h"
 #include "pqHighlightableToolButton.h"
 #include "pqLabel.h"
+#include "pqOutputPort.h"
+#include "pqPipelineSource.h"
 #include "pqPropertiesPanel.h"
 #include "pqScalarValueListPropertyWidget.h"
 #include "pqScaleByButton.h"
 #include "pqSignalAdaptors.h"
 #include "pqWidgetRangeDomain.h"
+#include "vtkBoundingBox.h"
 #include "vtkCollection.h"
 #include "vtkCommand.h"
+#include "vtkPVDataInformation.h"
 #include "vtkPVLogger.h"
 #include "vtkPVXMLElement.h"
 #include "vtkSMArrayRangeDomain.h"
@@ -56,6 +61,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "vtkSMProperty.h"
 #include "vtkSMProxy.h"
 #include "vtkSMUncheckedPropertyHelper.h"
+#include "vtkSmartPointer.h"
 
 #include <QDoubleSpinBox>
 #include <QHBoxLayout>
@@ -79,7 +85,7 @@ pqDoubleVectorPropertyWidget::pqDoubleVectorPropertyWidget(
   }
 
   // find the domain
-  vtkSMDoubleRangeDomain* defaultDomain = nullptr;
+  vtkSmartPointer<vtkSMDoubleRangeDomain> defaultDomain;
 
   vtkSMDomain* domain = nullptr;
   vtkSMDomainIterator* domainIter = dvp->NewDomainIterator();
@@ -91,7 +97,7 @@ pqDoubleVectorPropertyWidget::pqDoubleVectorPropertyWidget(
 
   if (!domain)
   {
-    defaultDomain = vtkSMDoubleRangeDomain::New();
+    defaultDomain = vtkSmartPointer<vtkSMDoubleRangeDomain>::New();
     domain = defaultDomain;
   }
 
@@ -164,8 +170,8 @@ pqDoubleVectorPropertyWidget::pqDoubleVectorPropertyWidget(
   {
     if (dvp->GetNumberOfElements() == 1 &&
       ((range->GetMinimumExists(0) && range->GetMaximumExists(0)) ||
-          (dvp->FindDomain("vtkSMArrayRangeDomain") != nullptr ||
-            dvp->FindDomain("vtkSMBoundsDomain") != nullptr)))
+          (dvp->FindDomain<vtkSMArrayRangeDomain>() != nullptr ||
+            dvp->FindDomain<vtkSMBoundsDomain>() != nullptr)))
     {
       // bounded ranges are represented with a slider and a spin box
       vtkVLogF(PARAVIEW_LOG_APPLICATION_VERBOSITY(),
@@ -289,8 +295,8 @@ pqDoubleVectorPropertyWidget::pqDoubleVectorPropertyWidget(
     }
   }
 
-  if (dvp->FindDomain("vtkSMArrayRangeDomain") != nullptr ||
-    dvp->FindDomain("vtkSMBoundsDomain") != nullptr)
+  if (dvp->FindDomain<vtkSMArrayRangeDomain>() != nullptr ||
+    dvp->FindDomain<vtkSMBoundsDomain>() != nullptr)
   {
     vtkVLogF(PARAVIEW_LOG_APPLICATION_VERBOSITY(), "add `Scale By` button");
     pqScaleByButton* scaleButton = new pqScaleByButton(this);
@@ -305,7 +311,7 @@ pqDoubleVectorPropertyWidget::pqDoubleVectorPropertyWidget(
     resetButton->setObjectName("Reset");
     QAction* resetActn = new QAction(resetButton);
     resetActn->setToolTip("Reset using current data values");
-    resetActn->setIcon(resetButton->style()->standardIcon(QStyle::SP_BrowserReload));
+    resetActn->setIcon(QIcon(":/pqWidgets/Icons/pqReset.svg"));
     resetButton->addAction(resetActn);
     resetButton->setDefaultAction(resetActn);
 
@@ -320,9 +326,34 @@ pqDoubleVectorPropertyWidget::pqDoubleVectorPropertyWidget(
 
     layoutLocal->addWidget(resetButton, 0, Qt::AlignBottom);
   }
-  if (defaultDomain)
+
+  auto dvpHints = hints ? hints->FindNestedElementByName("DoubleVectorPropertyWidget") : nullptr;
+  for (unsigned int cc = 0, max = (dvpHints ? dvpHints->GetNumberOfNestedElements() : 0); cc < max;
+       ++cc)
   {
-    defaultDomain->Delete();
+    auto elem = dvpHints->GetNestedElement(cc);
+    if (elem && elem->GetName() && strcmp(elem->GetName(), "Button") == 0)
+    {
+      auto type = elem->GetAttributeOrEmpty("type");
+      if (strcmp(type, "use_active_source_bounds") == 0)
+      {
+        auto tb = new QToolButton(this);
+        tb->setObjectName(type);
+        auto actn = new QAction(tb);
+        tb->addAction(actn);
+        tb->setDefaultAction(actn);
+        tb->setToolTip("Reset to active data bounds");
+        tb->setIcon(QIcon(":/pqWidgets/Icons/pqZoomToData.svg"));
+        QObject::connect(
+          tb, &QToolButton::clicked, this, &pqDoubleVectorPropertyWidget::resetToActiveDataBounds);
+        layoutLocal->addWidget(tb, 0, Qt::AlignBottom);
+      }
+      else
+      {
+        vtkVLogF(PARAVIEW_LOG_APPLICATION_VERBOSITY(),
+          "unknown button requested type='%s', ignoring.", type);
+      }
+    }
   }
 }
 
@@ -337,24 +368,24 @@ void pqDoubleVectorPropertyWidget::resetButtonClicked()
   if (vtkSMProperty* smproperty = this->property())
   {
     smproperty->ResetToDomainDefaults(/*use_unchecked_values*/ true);
-    emit this->changeAvailable();
-    emit this->changeFinished();
+    Q_EMIT this->changeAvailable();
+    Q_EMIT this->changeFinished();
   }
-  emit this->clearHighlight();
+  Q_EMIT this->clearHighlight();
 }
 
 //-----------------------------------------------------------------------------
 void pqDoubleVectorPropertyWidget::apply()
 {
   this->Superclass::apply();
-  emit this->clearHighlight();
+  Q_EMIT this->clearHighlight();
 }
 
 //-----------------------------------------------------------------------------
 void pqDoubleVectorPropertyWidget::reset()
 {
   this->Superclass::reset();
-  emit this->clearHighlight();
+  Q_EMIT this->clearHighlight();
 }
 
 //-----------------------------------------------------------------------------
@@ -379,7 +410,48 @@ void pqDoubleVectorPropertyWidget::scale(double factor)
     {
       helper.Set(cc, helper.GetAsDouble(cc) * factor);
     }
-    emit this->changeAvailable();
-    emit this->changeFinished();
+    Q_EMIT this->changeAvailable();
+    Q_EMIT this->changeFinished();
+  }
+}
+
+//-----------------------------------------------------------------------------
+void pqDoubleVectorPropertyWidget::resetToActiveDataBounds()
+{
+  vtkBoundingBox bbox;
+  if (auto port = pqActiveObjects::instance().activePort())
+  {
+    if (auto dinfo = port->getDataInformation())
+    {
+      bbox.AddBounds(dinfo->GetBounds());
+    }
+  }
+
+  if (bbox.IsValid())
+  {
+    double bds[6];
+    bbox.GetBounds(bds);
+    this->resetToBounds(bds);
+  }
+}
+
+//-----------------------------------------------------------------------------
+void pqDoubleVectorPropertyWidget::resetToBounds(const double bds[6])
+{
+  if (vtkSMProperty* smproperty = this->property())
+  {
+    vtkSMUncheckedPropertyHelper helper(smproperty);
+    if (helper.GetNumberOfElements() != 6)
+    {
+      qWarning("Property must have 6 elements. Ignoring reset request.");
+      return;
+    }
+
+    for (unsigned int cc = 0; cc < 6; cc++)
+    {
+      helper.Set(cc, bds[cc]);
+    }
+    Q_EMIT this->changeAvailable();
+    Q_EMIT this->changeFinished();
   }
 }

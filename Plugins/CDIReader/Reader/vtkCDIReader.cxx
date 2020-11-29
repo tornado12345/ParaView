@@ -44,14 +44,19 @@
 #include "vtkDataObject.h"
 #include "vtkDoubleArray.h"
 #include "vtkFieldData.h"
+#include "vtkFileSeriesReader.h"
 #include "vtkFloatArray.h"
 #include "vtkIdTypeArray.h"
 #include "vtkInformation.h"
+#include "vtkInformationIntegerKey.h"
+#include "vtkInformationStringKey.h"
 #include "vtkInformationVector.h"
 #include "vtkPointData.h"
 #include "vtkStreamingDemandDrivenPipeline.h"
 #include "vtkStringArray.h"
 #include "vtkUnstructuredGrid.h"
+
+#include "vtksys/FStream.hxx"
 
 #include "cdi.h"
 #include "vtk_netcdf.h"
@@ -270,6 +275,12 @@ int LLtoXYZ(double lon, double lat, double* x, double* y, double* z, int project
       sin((lat) - ((2 * lat + sin(2 * lat) - vtkMath::Pi() * sin(lat)) / (2 + 2 * cos(lat))));
     tz = 0.0;
   }
+  else if (projectionMode == 4) // Catalyst (lat/lon)
+  {
+    tx = lon;
+    ty = lat;
+    tz = 0.0;
+  }
 
   if (vtkMath::IsNan(tx) || vtkMath::IsNan(ty) || vtkMath::IsNan(tz))
   {
@@ -347,7 +358,8 @@ int ComparePointWithIndex(const void* a, const void* b)
 }
 
 vtkStandardNewMacro(vtkCDIReader);
-#ifdef PARAVIEW_USE_MPI
+#if VTK_MODULE_ENABLE_VTK_ParallelMPI
+#include "vtkDummyController.h"
 #include "vtkMultiProcessController.h"
 vtkCxxSetObjectMacro(vtkCDIReader, Controller, vtkMultiProcessController);
 #endif
@@ -390,7 +402,7 @@ vtkCDIReader::vtkCDIReader()
   this->PointDataArraySelection->AddObserver(vtkCommand::ModifiedEvent, this->SelectionObserver);
   this->DomainDataArraySelection->AddObserver(vtkCommand::ModifiedEvent, this->SelectionObserver);
 
-#ifdef PARAVIEW_USE_MPI
+#if VTK_MODULE_ENABLE_VTK_ParallelMPI
   this->Controller = nullptr;
   this->SetController(vtkMultiProcessController::GetGlobalController());
   if (!this->Controller)
@@ -514,7 +526,7 @@ vtkCDIReader::~vtkCDIReader()
 
   delete this->Internals;
 
-#ifdef PARAVIEW_USE_MPI
+#if VTK_MODULE_ENABLE_VTK_ParallelMPI
   this->SetController(nullptr);
 #endif
 
@@ -536,13 +548,13 @@ int vtkCDIReader::RequestInformation(
     return 0;
   }
 
-  if (!this->FileName)
+  if (this->FileName.empty())
   {
     vtkErrorMacro("No filename specified");
     return 0;
   }
 
-#ifdef PARAVIEW_USE_MPI
+#if VTK_MODULE_ENABLE_VTK_ParallelMPI
   if (this->Controller->GetNumberOfProcesses() > 1)
   {
     this->Decomposition = true;
@@ -550,10 +562,11 @@ int vtkCDIReader::RequestInformation(
   }
 #endif
 
-  vtkDebugMacro("In vtkCDIReader::RequestInformation read filename ok: " << this->FileName << endl);
+  vtkDebugMacro(
+    "In vtkCDIReader::RequestInformation read filename ok: " << this->FileName.c_str() << endl);
   vtkInformation* outInfo = outVector->GetInformationObject(0);
 
-  vtkDebugMacro("FileName: " << this->FileName << endl);
+  vtkDebugMacro("FileName: " << this->FileName.c_str() << endl);
 
   if (!this->GetDims())
   {
@@ -592,6 +605,19 @@ int vtkCDIReader::RequestInformation(
     this->DomainVarDataArray[i] = nullptr;
   }
 
+  if (outInfo->Has(vtkFileSeriesReader::FILE_SERIES_NUMBER_OF_FILES()))
+  {
+    this->NumberOfFiles = outInfo->Get(vtkFileSeriesReader::FILE_SERIES_NUMBER_OF_FILES());
+  }
+  if (outInfo->Has(vtkFileSeriesReader::FILE_SERIES_CURRENT_FILE_NUMBER()))
+  {
+    this->FileSeriesNumber = outInfo->Get(vtkFileSeriesReader::FILE_SERIES_CURRENT_FILE_NUMBER());
+  }
+  if (outInfo->Has(vtkFileSeriesReader::FILE_SERIES_FIRST_FILENAME()))
+  {
+    this->FileSeriesFirstName = outInfo->Get(vtkFileSeriesReader::FILE_SERIES_FIRST_FILENAME());
+  }
+
   VTK_CREATE(vtkDoubleArray, timeValues);
   timeValues->Allocate(this->NumberOfTimeSteps);
   timeValues->SetNumberOfComponents(1);
@@ -614,13 +640,14 @@ int vtkCDIReader::RequestInformation(
 
   if (this->NumberOfFiles > 1)
   {
-    this->ReadTimeUnits(this->FileSeriesFirstName);
+    this->ReadTimeUnits(this->FileSeriesFirstName.c_str());
   }
   else
   {
-    this->ReadTimeUnits(this->FileName);
+    this->ReadTimeUnits(this->FileName.c_str());
   }
   outInfo->Set(CAN_HANDLE_PIECE_REQUEST(), 1);
+  vtkDebugMacro("Out vtkCDIReader::RequestInformation" << endl);
 
   return 1;
 }
@@ -756,6 +783,11 @@ int vtkCDIReader::RequestData(vtkInformation* vtkNotUsed(reqInfo),
 
   vtkInformation* outInfo = outVector->GetInformationObject(0);
 
+  if (outInfo->Has(vtkFileSeriesReader::FILE_SERIES_CURRENT_FILE_NUMBER()))
+  {
+    this->FileSeriesNumber = outInfo->Get(vtkFileSeriesReader::FILE_SERIES_CURRENT_FILE_NUMBER());
+  }
+
   this->Piece = outInfo->Get(vtkStreamingDemandDrivenPipeline::UPDATE_PIECE_NUMBER());
   this->NumPieces = outInfo->Get(vtkStreamingDemandDrivenPipeline::UPDATE_NUMBER_OF_PIECES());
   this->NumberLocalCells = this->GetPartitioning(this->Piece, this->NumPieces, this->NumberOfCells,
@@ -855,6 +887,7 @@ int vtkCDIReader::RequestData(vtkInformation* vtkNotUsed(reqInfo),
 //----------------------------------------------------------------------------
 int vtkCDIReader::RegenerateVariables()
 {
+  vtkDebugMacro("In RegenerateVariables" << endl);
   this->NumberOfPointVars = 0;
   this->NumberOfCellVars = 0;
   this->NumberOfDomainVars = 0;
@@ -897,6 +930,7 @@ int vtkCDIReader::RegenerateVariables()
     this->DomainVarDataArray[i] = nullptr;
   }
 
+  vtkDebugMacro("Returning from RegenerateVariables" << endl);
   return 1;
 }
 
@@ -1006,8 +1040,6 @@ void vtkCDIReader::SetDefaults()
   this->CLat = nullptr;
   this->BeginCell = 0;
 
-  this->FileName = nullptr;
-  this->FileNameGrid = nullptr;
   this->DTime = 0;
   this->CellVarDataArray = nullptr;
   this->PointVarDataArray = nullptr;
@@ -1019,7 +1051,6 @@ void vtkCDIReader::SetDefaults()
   this->NeedVerticalGridFile = false;
 
   this->TimeUnits = nullptr;
-  this->FileSeriesFirstName = nullptr;
   this->Calendar = nullptr;
   this->TStepDistance = 1.0;
   this->NumberOfProcesses = 1;
@@ -1040,7 +1071,7 @@ int vtkCDIReader::OpenFile()
 {
   // With this version, no grib support is available.
   // check if we got either *.Grib or *.nc data
-  string file = string(this->FileName);
+  string file = this->FileName;
   string check = file.substr((file.size() - 4), file.size());
   if (check == "grib" || check == ".grb")
   {
@@ -1063,7 +1094,7 @@ int vtkCDIReader::OpenFile()
     this->VListID = -1;
   }
 
-  this->StreamID = streamOpenRead(this->FileNameGrid);
+  this->StreamID = streamOpenRead(this->FileNameGrid.c_str());
   if (this->StreamID < 0)
   {
     vtkErrorMacro("Couldn't open file: " << cdiStringError(this->StreamID) << endl);
@@ -1088,11 +1119,9 @@ int vtkCDIReader::OpenFile()
 //----------------------------------------------------------------------------
 int vtkCDIReader::GetDims()
 {
-  if (this->FileName)
+  if (!this->FileName.empty())
   {
-    delete[] this->FileNameGrid;
-    this->FileNameGrid = new char[strlen(this->FileName) + 1];
-    strcpy(this->FileNameGrid, this->FileName);
+    this->FileNameGrid = this->FileName;
     if (this->VListID < 0 || this->StreamID < 0)
     {
       if (!this->OpenFile())
@@ -1114,13 +1143,9 @@ int vtkCDIReader::GetDims()
         this->VListID = -1;
       }
 
-      char* directory = new char[strlen(this->FileName) + 1];
-      strcpy(directory, this->FileName);
-      delete[] this->FileNameGrid;
-      this->FileNameGrid = new char[strlen(directory) + 9];
-      string filePath = ::GetPathName(directory);
-      filePath += "/grid.nc";
-      strcpy(this->FileNameGrid, filePath.c_str());
+      char* directory = new char[strlen(this->FileName.c_str()) + 1];
+      strcpy(directory, this->FileName.c_str());
+      this->FileNameGrid = ::GetPathName(directory) + "/grid.nc";
       if (!this->OpenFile())
       {
         return 0;
@@ -1132,9 +1157,7 @@ int vtkCDIReader::GetDims()
         return 0;
       }
 
-      delete[] this->FileNameGrid;
-      this->FileNameGrid = new char[strlen(this->FileName) + 1];
-      strcpy(this->FileNameGrid, this->FileName);
+      this->FileNameGrid = this->FileName;
       if (!this->OpenFile())
       {
         return 0;
@@ -1154,14 +1177,9 @@ int vtkCDIReader::GetDims()
         this->VListID = -1;
       }
 
-      char* directory = new char[strlen(this->FileName) + 1];
-      strcpy(directory, this->FileName);
-      delete[] this->FileNameGrid;
-      this->FileNameGrid = nullptr;
-      this->FileNameGrid = new char[strlen(directory) + 9];
-      string filePath = ::GetPathName(directory);
-      filePath += "/grid.nc";
-      strcpy(this->FileNameGrid, filePath.c_str());
+      char* directory = new char[strlen(this->FileName.c_str()) + 1];
+      strcpy(directory, this->FileName.c_str());
+      this->FileNameGrid = ::GetPathName(directory) + "/grid.nc";
       if (!this->OpenFile())
       {
         return 0;
@@ -1178,9 +1196,7 @@ int vtkCDIReader::GetDims()
         return 0;
       }
 
-      delete[] this->FileNameGrid;
-      this->FileNameGrid = new char[strlen(this->FileName) + 1];
-      strcpy(this->FileNameGrid, this->FileName);
+      this->FileNameGrid = this->FileName;
       if (!this->OpenFile())
       {
         return 0;
@@ -1212,7 +1228,7 @@ int vtkCDIReader::GetDims()
     {
       this->NumberOfTimeSteps = ntsteps;
       int status, varId, ncFD;
-      CALL_NETCDF(nc_open(this->FileNameGrid, NC_NOWRITE, &ncFD));
+      CALL_NETCDF(nc_open(this->FileNameGrid.c_str(), NC_NOWRITE, &ncFD));
       static size_t start[] = { 0 };
       static size_t count[] = { 2 };
       double data[2];
@@ -1453,7 +1469,7 @@ int vtkCDIReader::GetVars()
 
   // prepare data structure and read in names
   string filename = PerformanceDataFile + "0000";
-  ifstream file(filename.c_str());
+  vtksys::ifstream file(filename.c_str());
   if (file.good())
   {
     this->HaveDomainData = true;
@@ -1481,7 +1497,7 @@ int vtkCDIReader::BuildVarArrays()
 {
   vtkDebugMacro("In vtkCDIReader::BuildVarArrays" << endl);
 
-  if (this->FileName)
+  if (!this->FileName.empty())
   {
     if (!GetVars())
     {
@@ -1544,17 +1560,19 @@ int vtkCDIReader::ReadAndOutputGrid(bool init)
       return 0;
     }
 
-    if ((this->ProjectionMode == 1) && !this->EliminateXWrap())
+    if (this->ProjectionMode == 2)
     {
-      return 0;
+      if (!this->EliminateYWrap())
+      {
+        return 0;
+      }
     }
-    if ((this->ProjectionMode == 2) && !this->EliminateYWrap())
+    else
     {
-      return 0;
-    }
-    if ((this->ProjectionMode == 3) && !this->EliminateXWrap())
-    {
-      return 0;
+      if (!this->EliminateXWrap())
+      {
+        return 0;
+      }
     }
   }
 
@@ -1686,20 +1704,23 @@ int vtkCDIReader::ConstructGridGeometry()
   CHECK_NEW(this->OrigConnections);
   int* new_cells = new int[2];
 
-  gridInqXunits(this->GridID, units);
-  if (strncmp(units, "degree", 6) == 0)
+  if (this->ProjectionMode != 4)
   {
-    for (int i = 0; i < size; i++)
+    gridInqXunits(this->GridID, units);
+    if (strncmp(units, "degree", 6) == 0)
     {
-      this->CLonVertices[i] = vtkMath::RadiansFromDegrees(this->CLonVertices[i]);
+      for (int i = 0; i < size; i++)
+      {
+        this->CLonVertices[i] = vtkMath::RadiansFromDegrees(this->CLonVertices[i]);
+      }
     }
-  }
-  gridInqYunits(this->GridID, units);
-  if (strncmp(units, "degree", 6) == 0)
-  {
-    for (int i = 0; i < size; i++)
+    gridInqYunits(this->GridID, units);
+    if (strncmp(units, "degree", 6) == 0)
     {
-      this->CLatVertices[i] = vtkMath::RadiansFromDegrees(this->CLatVertices[i]);
+      for (int i = 0; i < size; i++)
+      {
+        this->CLatVertices[i] = vtkMath::RadiansFromDegrees(this->CLatVertices[i]);
+      }
     }
   }
 
@@ -1736,7 +1757,7 @@ int vtkCDIReader::ConstructGridGeometry()
   int* vertex_ids2 = new int[size2];
   CHECK_NEW(this->VertexIds);
   CHECK_NEW(vertex_ids2);
-#ifdef PARAVIEW_USE_MPI
+#if VTK_MODULE_ENABLE_VTK_ParallelMPI
   if (this->Decomposition)
   {
     if (this->Piece == 0)
@@ -2222,6 +2243,12 @@ void vtkCDIReader::OutputPoints(bool init)
       y = this->PointY[j] * 120;
       z = 0.0;
     }
+    else if (this->ProjectionMode == 4)
+    {
+      x = this->PointX[j];
+      y = this->PointY[j];
+      z = 0.0;
+    }
 
     if (!this->ShowMultilayerView)
     {
@@ -2254,17 +2281,21 @@ void vtkCDIReader::OutputPoints(bool init)
       points->InsertNextPoint(x, y, z);
       for (int levelNum = 0; levelNum < this->MaximumNVertLevels; levelNum++)
       {
-        if (this->ProjectionMode > 0)
+        if ((this->ProjectionMode != 0) && (this->ProjectionMode != 4))
         {
           z = -(this->DepthVar[levelNum] * adjustedLayerThickness);
         }
-        else
+        else if (this->ProjectionMode == 0)
         {
           if (!retval && ((x != 0.0) || (y != 0.0) || (z != 0.0)))
           {
             rholevel = rho - (adjustedLayerThickness * this->DepthVar[levelNum]);
             retval = ::SphericalToCartesian(rholevel, phi, theta, &x, &y, &z);
           }
+        }
+        else if (this->ProjectionMode == 4)
+        {
+          z = -(this->DepthVar[levelNum] * (adjustedLayerThickness * 0.04));
         }
         points->InsertNextPoint(x, y, z);
       }
@@ -2806,7 +2837,7 @@ int vtkCDIReader::LoadDomainVarData(int variableIndex)
 
     vector<string> wordVec;
     vector<string>::iterator k;
-    ifstream file(filename.c_str());
+    vtksys::ifstream file(filename.c_str());
     string str, word;
     double temp[1];
 
@@ -2998,51 +3029,25 @@ const char* vtkCDIReader::GetDomainArrayName(int index)
 //----------------------------------------------------------------------------
 void vtkCDIReader::SetFileName(const char* val)
 {
-  if (this->FileName == nullptr || val == nullptr || strcmp(this->FileName, val) != 0)
+  if (this->FileName.empty() || val == nullptr || strcmp(this->FileName.c_str(), val) != 0)
   {
-    if (this->FileName)
+    if (this->StreamID >= 0)
     {
-      if (this->StreamID >= 0)
-      {
-        streamClose(this->StreamID);
-        this->StreamID = -1;
-        this->VListID = -1;
-      }
-      delete[] this->FileName;
-      this->FileName = nullptr;
+      streamClose(this->StreamID);
+      this->StreamID = -1;
+      this->VListID = -1;
     }
     this->Modified();
     if (val == nullptr)
     {
       return;
     }
-    this->FileName = new char[strlen(val) + 1];
-    strcpy(this->FileName, val);
-    vtkDebugMacro("SetFileName to " << FileName << endl);
+    this->FileName = val;
+    vtkDebugMacro("SetFileName to " << this->FileName << endl);
 
     this->DestroyData();
     this->RegenerateVariables();
   }
-}
-
-//----------------------------------------------------------------------------
-// Set to lat/lon (equidistant cylindrical) projection.
-//----------------------------------------------------------------------------
-void vtkCDIReader::SetFileSeriesNumbers(int val1, int val2)
-{
-  this->FileSeriesNumber = val1;
-  this->NumberOfFiles = val2;
-}
-
-//----------------------------------------------------------------------------
-// Set to lat/lon (equidistant cylindrical) projection.
-//----------------------------------------------------------------------------
-void vtkCDIReader::SetFileSeriesFirstName(const char* val)
-{
-  delete[] this->FileSeriesFirstName;
-  this->FileSeriesFirstName = new char[strlen(val) + 1];
-  strcpy(this->FileSeriesFirstName, val);
-  vtkDebugMacro("SetFileSeriesFirstName to " << FileSeriesFirstName << endl);
 }
 
 //----------------------------------------------------------------------------
@@ -3247,7 +3252,8 @@ void vtkCDIReader::SetShowMultilayerView(bool val)
 void vtkCDIReader::PrintSelf(ostream& os, vtkIndent indent)
 {
   this->Superclass::PrintSelf(os, indent);
-  os << indent << "FileName: " << (this->FileName ? this->FileName : "nullptr") << "\n";
+  os << indent << "FileName: " << (this->FileName.c_str() ? this->FileName.c_str() : "nullptr")
+     << "\n";
   os << indent << "VariableDimensions: " << this->VariableDimensions << endl;
   os << indent << "AllDimensions: " << this->AllDimensions << endl;
   os << indent << "this->NumberOfPointVars: " << this->NumberOfPointVars << "\n";

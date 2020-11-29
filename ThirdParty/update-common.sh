@@ -52,6 +52,22 @@ git_archive () {
         tar -C "$extractdir" -x
 }
 
+git_archive_all () {
+    local tmptarball="temp.tar"
+    git archive-all --prefix="" "$tmptarball"
+    mkdir -p "$extractdir/$name-reduced"
+    tar -C "$extractdir/$name-reduced" -xf "$tmptarball" $paths
+    rm -f "$tmptarball"
+}
+
+disable_custom_gitattributes() {
+    pushd "${extractdir}/${name}-reduced"
+    # Git does not allow custom attributes in a subdirectory where we
+    # are about to merge the `.gitattributes` file, so disable them.
+    sed -i '/^\[attr\]/ {s/^/#/;}' .gitattributes
+    popd
+}
+
 die () {
     echo >&2 "$@"
     exit 1
@@ -63,8 +79,6 @@ warn () {
 
 readonly regex_date='20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
 readonly basehash_regex="$name $regex_date ([0-9a-f]*)"
-readonly basehash="$( git rev-list --author="$ownership" --grep="$basehash_regex" -n 1 HEAD )"
-readonly upstream_old_short="$( git cat-file commit "$basehash" | sed -n '/'"$basehash_regex"'/ {s/.*(//;s/)//;p}' | egrep '^[0-9a-f]+$' )"
 readonly toplevel_dir="$( git rev-parse --show-toplevel )"
 
 cd "$toplevel_dir"
@@ -82,6 +96,18 @@ cd "$toplevel_dir"
     die "'repo' is empty"
 [ -n "$tag" ] || \
     die "'tag' is empty"
+
+# Check for an empty destination directory on disk.  By checking on disk and
+# not in the repo it allows a library to be freshly re-inialized in a single
+# commit rather than first deleting the old copy in one commit and adding the
+# new copy in a seperate commit.
+if [ ! -d "$(git rev-parse --show-toplevel)/$subtree" ]; then
+    readonly basehash=""
+else
+    readonly basehash="$( git rev-list --author="$ownership" --grep="$basehash_regex" -n 1 HEAD )"
+fi
+readonly upstream_old_short="$( git cat-file commit "$basehash" | sed -n '/'"$basehash_regex"'/ {s/.*(//;s/)//;p;}' | egrep '^[0-9a-f]+$' )"
+
 [ -n "$basehash" ] || \
     warn "'basehash' is empty; performing initial import"
 readonly do_shortlog="${shortlog-false}"
@@ -96,14 +122,16 @@ readonly extractdir="$workdir/extract"
 trap "rm -rf '$workdir'" EXIT
 
 # Get upstream
-git clone "$repo" "$upstreamdir"
+git clone --recursive "$repo" "$upstreamdir"
 
 if [ -n "$basehash" ]; then
+    # Remove old worktrees
+    git worktree prune
     # Use the existing package's history
     git worktree add "$extractdir" "$basehash"
     # Clear out the working tree
     pushd "$extractdir"
-    git ls-files | xargs rm -v
+    git ls-files --recurse-submodules | xargs rm -v
     find . -type d -empty -delete
     popd
 else
@@ -115,6 +143,8 @@ fi
 # Extract the subset of upstream we care about
 pushd "$upstreamdir"
 git checkout "$tag"
+git submodule sync --recursive
+git submodule update --recursive --init
 readonly upstream_hash="$( git rev-parse HEAD )"
 readonly upstream_hash_short="$( git rev-parse --short=8 "$upstream_hash" )"
 readonly upstream_datetime="$( git rev-list "$upstream_hash" --format='%ci' -n 1 | grep -e "^$regex_date" )"
@@ -158,8 +188,12 @@ popd
 if [ -n "$basehash" ]; then
     git merge --log -s recursive "-Xsubtree=$subtree/" --no-commit "upstream-$name"
 else
+    # Note: on Windows 'git merge --help' will open a browser, and the check
+    # will fail, so use the flag by default.
     unrelated_histories_flag=""
-    if git merge --help | grep -q -e allow-unrelated-histories; then
+    if git --version | grep -q windows; then
+        unrelated_histories_flag="--allow-unrelated-histories "
+    elif git merge --help | grep -q -e allow-unrelated-histories; then
         unrelated_histories_flag="--allow-unrelated-histories "
     fi
     readonly unrelated_histories_flag

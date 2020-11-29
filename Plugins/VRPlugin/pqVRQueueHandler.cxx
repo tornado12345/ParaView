@@ -32,6 +32,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "pqVRQueueHandler.h"
 
 #include "vtkCollection.h"
+#include "vtkNew.h"
 #include "vtkObjectFactory.h"
 #include "vtkPVXMLElement.h"
 #include "vtkSMRenderViewProxy.h"
@@ -50,10 +51,12 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <QTimer>
 #include <QtDebug>
 
+#include <cassert>
+
 class pqVRQueueHandler::pqInternals
 {
 public:
-  vtkCollection* Styles;
+  vtkNew<vtkCollection> Styles;
   vtkWeakPointer<vtkVRQueue> Queue;
   QTimer Timer;
 };
@@ -78,7 +81,6 @@ pqVRQueueHandler::pqVRQueueHandler(vtkVRQueue* queue, QObject* parentObject)
   : Superclass(parentObject)
 {
   this->Internals = new pqInternals();
-  this->Internals->Styles = vtkCollection::New();
   this->Internals->Queue = queue;
   this->Internals->Timer.setInterval(1);
   this->Internals->Timer.setSingleShot(true);
@@ -103,7 +105,7 @@ void pqVRQueueHandler::add(vtkVRInteractorStyle* style)
   if (!this->Internals->Styles->IsItemPresent(style))
   {
     this->Internals->Styles->AddItem(style);
-    emit stylesChanged();
+    Q_EMIT stylesChanged();
     return;
   }
 }
@@ -112,7 +114,7 @@ void pqVRQueueHandler::add(vtkVRInteractorStyle* style)
 void pqVRQueueHandler::remove(vtkVRInteractorStyle* style)
 {
   this->Internals->Styles->RemoveItem(style);
-  emit stylesChanged();
+  Q_EMIT stylesChanged();
 }
 
 //----------------------------------------------------------------------public
@@ -121,7 +123,7 @@ void pqVRQueueHandler::clear()
   if (this->Internals->Styles->GetNumberOfItems() != 0)
   {
     this->Internals->Styles->RemoveAllItems();
-    emit stylesChanged();
+    Q_EMIT stylesChanged();
   }
 }
 
@@ -155,7 +157,7 @@ void pqVRQueueHandler::stop()
 //----------------------------------------------------------------------------
 void pqVRQueueHandler::processEvents()
 {
-  Q_ASSERT(this->Internals->Queue != NULL);
+  assert(this->Internals->Queue != NULL);
   std::queue<vtkVREventData> events;
   this->Internals->Queue->TryDequeue(events);
 
@@ -253,13 +255,13 @@ void pqVRQueueHandler::configureStyles(vtkPVXMLElement* xml, vtkSMProxyLocator* 
     this->configureStyles(xml->FindNestedElementByName("VRInteractorStyles"), locator);
   }
 
-  emit stylesChanged();
+  Q_EMIT stylesChanged();
 }
 
 //----------------------------------------------------------------------------
 void pqVRQueueHandler::saveStylesConfiguration(vtkPVXMLElement* root)
 {
-  Q_ASSERT(root != NULL);
+  assert(root != NULL);
 
   vtkPVXMLElement* tempParent = vtkPVXMLElement::New();
   tempParent->SetName("VRInteractorStyles");

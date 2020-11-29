@@ -56,13 +56,14 @@ configure_file(
   @ONLY)
 
 vtk_module_add_executable(ParaView::smTestDriver
+  DEVELOPMENT
   vtkSMTestDriver.cxx
   vtkSMTestDriver.h
   "${CMAKE_CURRENT_BINARY_DIR}/vtkSMTestDriverConfig.h")
 
 set(mpi_defines)
 if (PARAVIEW_USE_MPI)
-  find_package(MPI QUIET REQUIRED)
+  find_package(MPI QUIET REQUIRED COMPONENTS C)
 
   list(APPEND mpi_defines
     PARAVIEW_USE_MPI
@@ -71,7 +72,7 @@ if (PARAVIEW_USE_MPI)
     # FIXME: This is currently hard-coded to 2 since the maximum isn't
     # sensible. However, there is no command line flag to override the number
     # of processes to use for a given test, so instead, just use 2 for now.
-    "PARAVIEW_MPI_MAX_NUMPROCS=2")
+    "PARAVIEW_MPI_MAX_NUMPROCS=2") # See ParaViewTesting.cmake@@paraview_add_test_mpi
     #"PARAVIEW_MPI_MAX_NUMPROCS=${MPIEXEC_MAX_NUMPROCS}")
 
   if (MPI_PREFLAGS)

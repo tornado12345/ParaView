@@ -72,6 +72,10 @@ pqAnimationCue::pqAnimationCue(const QString& group, const QString& name, vtkSMP
     proxy->GetProperty("Enabled"), vtkCommand::ModifiedEvent, this, SLOT(onEnabledModified()));
 
   connector->Connect(proxy, vtkCommand::ModifiedEvent, this, SIGNAL(keyframesModified()));
+
+  // keep the GUI updated when the client side vtkPVAnimationCue is modified
+  connector->Connect(vtkObject::SafeDownCast(proxy->GetClientSideObject()),
+    vtkCommand::ModifiedEvent, this, SIGNAL(keyframesModified()));
 }
 
 //-----------------------------------------------------------------------------
@@ -140,7 +144,7 @@ bool pqAnimationCue::isEnabled() const
 //-----------------------------------------------------------------------------
 void pqAnimationCue::onEnabledModified()
 {
-  emit this->enabled(this->isEnabled());
+  Q_EMIT this->enabled(this->isEnabled());
 }
 
 //-----------------------------------------------------------------------------

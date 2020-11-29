@@ -1,10 +1,11 @@
 /******************************************************************************
- * Copyright 2018 NVIDIA Corporation. All rights reserved.
+ * Copyright 2020 NVIDIA Corporation. All rights reserved.
  *****************************************************************************/
 /**
    \file
    \brief        Scene attribute controlling irregular volume rendering.
 */
+
 
 #ifndef NVIDIA_INDEX_IIRREGULAR_VOLUME_RENDERING_PROPERTIES_H
 #define NVIDIA_INDEX_IIRREGULAR_VOLUME_RENDERING_PROPERTIES_H
@@ -12,52 +13,71 @@
 #include <mi/dice.h>
 #include <nv/index/iattribute.h>
 
-namespace nv
-{
-namespace index
-{
+
+namespace nv {
+namespace index {
 
 /// Interface representing rendering properties for irregular volumes.
-class IIrregular_volume_rendering_properties
-  : public mi::base::Interface_declare<0x72327639, 0xd6ed, 0x4fc9, 0xba, 0x2f, 0x92, 0xf3, 0x94,
-      0x2a, 0xee, 0x7c, nv::index::IAttribute>
+///
+/// \ingroup nv_index_scene_description_attribute
+///
+class IIrregular_volume_rendering_properties :
+    public mi::base::Interface_declare<0x72327639,0xd6ed,0x4fc9,0xba,0x2f,0x92,0xf3,0x94,0x2a,0xee,0x7c,
+                                       nv::index::IAttribute>
 {
 public:
-  struct Rendering
-  {
-    mi::Uint32 sampling_mode;                      ///< Mode for sampling.
-    mi::Float32 sampling_segment_length;           ///< Segment length for sampling.
-    mi::Float32 sampling_reference_segment_length; ///< Segment length for sampling.
-  };
+    /// Get default subregion halo size, in object space.
+    /// Subregions are expanded by the halo size for data loading.
+    /// Similar to subcube_border_size, it enables filtering and it defines the step size limit 
+    /// for discrete volume sampling.
+    virtual mi::Float32 get_halo_size() const = 0;
+    virtual void        set_halo_size(mi::Float32 f) = 0;
 
-  struct Diagnostics
-  {
-    mi::Uint32 mode;  ///< If not 0, a diagnostic rendering is performed instead of normal rendering
-                      ///(1:wireframe, 2:run path)
-    mi::Uint32 flags; ///< Bit flags to enable various diagnostics.
-  };
+    /// \name Render sampling settings
+    ///@{
+    /// Get render sampling mode (0 = preintegrated colormap; 1 = discrete sampling)
+    virtual mi::Uint32  get_sampling_mode() const = 0;
+    virtual void        set_sampling_mode(mi::Uint32 m) = 0;
 
-  struct Wireframe
-  {
-    mi::Float32 wire_size;        ///< World space size of wireframe mode lines.
-    mi::Float32 color_mod_begin;  ///< Distance from camera where color modulation starts.
-    mi::Float32 color_mod_factor; ///< Distance is multiplied by factor for color modulation. 0
-                                  /// disables color modulation.
-  };
+    /// Get length of discrete sampling segment length on ray.
+    /// Should be less than subregion halo size to avoid artifacts.
+    virtual mi::Float32 get_sampling_segment_length() const = 0;
+    virtual void        set_sampling_segment_length(mi::Float32 l) = 0;
+        
+    /// Get reference length of discrete sampling segment length on ray.
+    virtual mi::Float32 get_sampling_reference_segment_length() const = 0;
+    virtual void        set_sampling_reference_segment_length(mi::Float32 l) = 0;
+    ///@}
 
-  /// Set or get rendering properties.
-  virtual void set_rendering(const Rendering&) = 0;
-  virtual void get_rendering(Rendering&) const = 0;
 
-  /// Set or get diagnostic rendering mode for irregular volume.
-  virtual void set_diagnostics(const Diagnostics&) = 0;
-  virtual void get_diagnostics(Diagnostics&) const = 0;
+    /// \name Diagnostic rendering settings
+    ///@{
+    /// Get diagnostic rendering mode.
+    /// If not 0, a diagnostic rendering is performed instead of normal rendering (1:wireframe, 2:run path)
+    virtual mi::Uint32  get_diagnostics_mode() const = 0;
+    virtual void        set_diagnostics_mode(mi::Uint32 m) = 0;
 
-  /// Set or get wireframe mode properties.
-  virtual void set_wireframe(const Wireframe&) = 0;
-  virtual void get_wireframe(Wireframe&) const = 0;
+    /// Get bit flags to enable various diagnostics (internal).
+    virtual mi::Uint32  get_diagnostics_flags() const = 0;
+    virtual void        set_diagnostics_flags(mi::Uint32 f) = 0;
+
+    /// Get world space size of wireframe mode lines.
+    virtual mi::Float32 get_wireframe_size() const = 0;
+    virtual void        set_wireframe_size(mi::Float32 s) = 0;
+
+    /// Get distance from camera where color modulation starts.
+    virtual mi::Float32 get_wireframe_color_mod_begin() const = 0;
+    virtual void        set_wireframe_color_mod_begin(mi::Float32 f) = 0;
+
+    /// Get distance factor. Distance is multiplied by factor for color modulation. 0 disables color modulation.
+    virtual mi::Float32 get_wireframe_color_mod_factor() const = 0;
+    virtual void        set_wireframe_color_mod_factor(mi::Float32 f) = 0;
+    ///@}
+
+    
 };
-}
-} // nv::index
+
+} // namespace index
+} // namespace nv
 
 #endif

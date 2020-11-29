@@ -284,7 +284,7 @@ public:
 
   const QVariant& customColumnState(int col) const
   {
-    Q_ASSERT(col >= 0 && col < static_cast<int>(this->CustomColumnState.size()));
+    assert(col >= 0 && col < static_cast<int>(this->CustomColumnState.size()));
     return this->CustomColumnState[col].first;
   }
 
@@ -305,7 +305,7 @@ public:
   void setCustomColumnState(
     int col, const QVariant& value, bool force, pqCompositeDataInformationTreeModel* dmodel)
   {
-    Q_ASSERT(col >= 0 && col < static_cast<int>(this->CustomColumnState.size()));
+    assert(col >= 0 && col < static_cast<int>(this->CustomColumnState.size()));
     std::pair<QVariant, bool>& value_pair = this->CustomColumnState[col];
     if (value_pair.first != value)
     {
@@ -340,7 +340,7 @@ public:
 
   void customColumnStates(int col, QList<QPair<unsigned int, QVariant> >& values) const
   {
-    Q_ASSERT(col >= 0 && col < static_cast<int>(this->CustomColumnState.size()));
+    assert(col >= 0 && col < static_cast<int>(this->CustomColumnState.size()));
     const std::pair<QVariant, bool>& value_pair = this->CustomColumnState[col];
 
     // add explicitly set values.
@@ -493,6 +493,7 @@ pqCompositeDataInformationTreeModel::pqCompositeDataInformationTreeModel(QObject
   : Superclass(parentObject)
   , Internals(new pqCompositeDataInformationTreeModel::pqInternals())
   , UserCheckable(false)
+  , OnlyLeavesAreUserCheckable(false)
   , ExpandMultiPiece(false)
   , Exclusivity(false)
   , DefaultCheckState(false)
@@ -647,7 +648,10 @@ Qt::ItemFlags pqCompositeDataInformationTreeModel::flags(const QModelIndex& idx)
   Qt::ItemFlags pflags = this->Superclass::flags(idx);
   if (this->UserCheckable && idx.column() == 0)
   {
-    pflags |= Qt::ItemIsUserCheckable | Qt::ItemIsTristate;
+    if (this->OnlyLeavesAreUserCheckable == false || !this->hasChildren(idx))
+    {
+      pflags |= Qt::ItemIsUserCheckable | Qt::ItemIsTristate;
+    }
   }
 
   // can't use Qt::ItemIsAutoTristate till we drop support for Qt 4 :(.
@@ -712,7 +716,7 @@ bool pqCompositeDataInformationTreeModel::setHeaderData(
   if (orientation == Qt::Horizontal && section == 0 && role == Qt::DisplayRole)
   {
     this->HeaderLabel = value.toString();
-    emit this->headerDataChanged(orientation, section, section);
+    Q_EMIT this->headerDataChanged(orientation, section, section);
     return true;
   }
   return this->Superclass::setHeaderData(section, orientation, value, role);
@@ -751,7 +755,7 @@ QList<unsigned int> pqCompositeDataInformationTreeModel::checkedNodes() const
   QSet<unsigned int> indices;
   pqInternals& internals = (*this->Internals);
   internals.rootNode().checkedNodes(indices, false);
-  return indices.toList();
+  return indices.values();
 }
 
 //-----------------------------------------------------------------------------
@@ -760,7 +764,7 @@ QList<unsigned int> pqCompositeDataInformationTreeModel::checkedLeaves() const
   QSet<unsigned int> indices;
   pqInternals& internals = (*this->Internals);
   internals.rootNode().checkedNodes(indices, true);
-  return indices.toList();
+  return indices.values();
 }
 
 //-----------------------------------------------------------------------------

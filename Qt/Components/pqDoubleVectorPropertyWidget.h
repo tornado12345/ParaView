@@ -49,14 +49,14 @@ public:
   void apply() override;
   void reset() override;
 
-signals:
+Q_SIGNALS:
   /**
   * internal signal used to clear highlights from pqHighlightablePushButton.
   */
   void clearHighlight();
   void highlightResetButton();
 
-protected slots:
+protected Q_SLOTS:
   /**
   * called when the user clicks the "reset" button for a specific property.
   */
@@ -65,6 +65,16 @@ protected slots:
   void scaleHalf();
   void scaleTwice();
   void scale(double);
+
+  /**
+   * sets the value using active source's data bounds.
+   */
+  void resetToActiveDataBounds();
+
+  /**
+   * sets the value to the specified bounds.
+   */
+  void resetToBounds(const double bds[6]);
 
 private:
   Q_DISABLE_COPY(pqDoubleVectorPropertyWidget)

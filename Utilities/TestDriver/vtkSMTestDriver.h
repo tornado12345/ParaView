@@ -125,9 +125,6 @@ private:
   int TestRenderServer;
   int TestServer;
   int TestScript; // additional process to run
-  int TestTiledDisplay;
-  std::string TestTiledDisplayTDX;
-  std::string TestTiledDisplayTDY;
   int AllowErrorInOutput;
   int ScriptIgnoreOutputErrors;
   int TestRemoteRendering;
@@ -135,6 +132,7 @@ private:
   int NumberOfServers;
   // Specify if the -rc flag was passed or not
   int ReverseConnection;
+  bool ClientUseMPI;
 };
 
 #endif

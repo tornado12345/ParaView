@@ -51,9 +51,11 @@ public:
   void SetAngle(double angle);
 
   /**
-   * Initialize the view
+   * Use hardware interpolation of the cubemap texture during projection. In case of
+   * low resolution of the cubemap, it can be useful to enable it. The drawback is that there
+   * can be visible artifacts when enabled with some OpenGL implementations.
    */
-  void Initialize(unsigned int id) override;
+  void SetCubemapInterpolation(bool interpolate);
 
   /**
    * FXAA is not supported yet in this view
@@ -62,7 +64,7 @@ public:
   void SetUseFXAA(bool) override{};
 
 protected:
-  vtkPVPanoramicProjectionView() = default;
+  vtkPVPanoramicProjectionView();
   ~vtkPVPanoramicProjectionView() override = default;
 
 private:

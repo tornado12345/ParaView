@@ -137,7 +137,7 @@ public:
   void setEnabledHeaderToolTip(const QString& val);
   const QString& enabledHeaderToolTip() const { return this->EnabledHeaderToolTip; }
 
-public slots:
+public Q_SLOTS:
 
   /**
   * set the animation mode
@@ -180,7 +180,7 @@ public slots:
    */
   void setTimeNotation(const QChar& notation);
 
-signals:
+Q_SIGNALS:
   // emitted when a track is double clicked on
   void trackSelected(pqAnimationTrack*);
   // emitted when the current time was changed by this model
@@ -188,7 +188,7 @@ signals:
   // emitted when the time of a keyframe was changed by this model
   void keyFrameTimeChanged(pqAnimationTrack* track, pqAnimationKeyFrame* kf, int end, double time);
 
-protected slots:
+protected Q_SLOTS:
 
   void resizeTracks();
   void trackNameChanged();
@@ -201,6 +201,16 @@ protected:
   double timeFromTick(int tick);
   int tickFromTime(double pos);
   void drawForeground(QPainter* painter, const QRectF& rect) override;
+
+  /**
+  * Draws a label for the specified time in the specified row of the timeline.
+  * The user can enter painter or metrics parameters to customize it.
+  * A list of priorities must be entered: they define the zones where the label can't be drawn.
+  */
+  QRectF drawTimeLabel(double time, const QRectF& row, QPainter* painter,
+    const QFontMetrics& metrics, QList<const QRectF*> const& priorities);
+
+  void updateNewTime(QGraphicsSceneMouseEvent* mouseEvent);
   bool hitTestCurrentTimePoly(const QPointF& pos);
   pqAnimationTrack* hitTestTracks(const QPointF& pos);
   pqAnimationKeyFrame* hitTestKeyFrame(pqAnimationTrack* t, const QPointF& pos);

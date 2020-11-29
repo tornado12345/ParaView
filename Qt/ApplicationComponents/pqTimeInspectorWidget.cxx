@@ -33,15 +33,19 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "ui_pqTimeInspectorWidget.h"
 
 #include "pqActiveObjects.h"
+#include "pqAnimationManager.h"
 #include "pqAnimationModel.h"
+#include "pqAnimationScene.h"
 #include "pqAnimationTrack.h"
 #include "pqApplicationCore.h"
 #include "pqCoreUtilities.h"
+#include "pqPVApplicationCore.h"
 #include "pqPropertyLinks.h"
 #include "pqPropertyLinksConnection.h"
 #include "pqProxy.h"
 #include "pqServer.h"
 #include "pqServerManagerModel.h"
+#include "pqUndoStack.h"
 #include "vtkCommand.h"
 #include "vtkCompositeAnimationPlayer.h"
 #include "vtkNew.h"
@@ -50,12 +54,15 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "vtkSMParaViewPipelineController.h"
 #include "vtkSMPropertyHelper.h"
 #include "vtkSMSourceProxy.h"
+#include "vtkSMTrace.h"
 
 #include <QHeaderView>
 #include <QLineF>
 #include <QPainter>
 #include <QVariant>
 #include <QtDebug>
+
+#include <cassert>
 
 namespace
 {
@@ -84,7 +91,7 @@ protected:
   /// values are updated in either directions.
   void setServerManagerValue(bool use_unchecked, const QVariant& value) override
   {
-    Q_ASSERT(use_unchecked == false);
+    assert(use_unchecked == false);
     (void)use_unchecked;
 
     std::vector<vtkSMProxy*> proxies;
@@ -94,14 +101,14 @@ protected:
       proxies.push_back(aproxy);
     }
     proxies.push_back(NULL);
-    Q_ASSERT(proxies.size() > 0);
+    assert(proxies.size() > 0);
     vtkSMPropertyHelper(this->propertySM())
       .Set(&proxies[0], static_cast<unsigned int>(proxies.size() - 1));
   }
 
   QVariant currentServerManagerValue(bool use_unchecked) const override
   {
-    Q_ASSERT(use_unchecked == false);
+    assert(use_unchecked == false);
     (void)use_unchecked;
     QList<QVariant> value;
 
@@ -148,7 +155,7 @@ public:
   pqAnimationModel* animationModel() const
   {
     pqAnimationModel* amodel = qobject_cast<pqAnimationModel*>(this->parent());
-    Q_ASSERT(amodel);
+    assert(amodel);
     return amodel;
   }
 
@@ -239,6 +246,7 @@ class pqTimeInspectorWidget::pqInternals
 {
 public:
   void* VoidServer;
+  QPointer<pqAnimationScene> Scene;
   QPointer<pqServer> Server;
   Ui::TimeInspectorWidget Ui;
   pqPropertyLinks Links;
@@ -266,7 +274,7 @@ pqTimeInspectorWidget::pqTimeInspectorWidget(QWidget* parentObject)
     SLOT(handleProxyNameChanged(pqServerManagerModelItem*)));
 
   pqAnimationModel* animationModel = this->Internals->Ui.AnimationWidget->animationModel();
-  Q_ASSERT(animationModel);
+  assert(animationModel);
   this->connect(animationModel, SIGNAL(currentTimeSet(double)), SLOT(setSceneCurrentTime(double)));
 
   this->connect(this->Internals->Ui.AnimationWidget, SIGNAL(enableTrackClicked(pqAnimationTrack*)),
@@ -278,11 +286,24 @@ pqTimeInspectorWidget::pqTimeInspectorWidget(QWidget* parentObject)
 
   pqCoreUtilities::connect(vtkPVGeneralSettings::GetInstance(), vtkCommand::ModifiedEvent, this,
     SLOT(generalSettingsChanged()));
+
+  this->connect(pqPVApplicationCore::instance()->animationManager(),
+    SIGNAL(activeSceneChanged(pqAnimationScene*)), SLOT(setAnimationScene(pqAnimationScene*)));
 }
 
 //-----------------------------------------------------------------------------
 pqTimeInspectorWidget::~pqTimeInspectorWidget()
 {
+}
+
+//-----------------------------------------------------------------------------
+void pqTimeInspectorWidget::setAnimationScene(pqAnimationScene* scene)
+{
+  this->Internals->Scene = scene;
+  if (scene)
+  {
+    QObject::connect(scene, SIGNAL(animationTime(double)), this, SLOT(updateSceneTime()));
+  }
 }
 
 //-----------------------------------------------------------------------------
@@ -307,7 +328,7 @@ pqServer* pqTimeInspectorWidget::server() const
 void pqTimeInspectorWidget::updateScene()
 {
   pqAnimationModel* animationModel = this->Internals->Ui.AnimationWidget->animationModel();
-  Q_ASSERT(animationModel);
+  assert(animationModel);
 
   pqPropertyLinks& links = this->Internals->Links;
   links.clear();
@@ -326,7 +347,10 @@ void pqTimeInspectorWidget::updateScene()
   vtkSMSession* session = curServer->session();
   vtkNew<vtkSMParaViewPipelineController> controller;
 
-  vtkSMProxy* sceneProxy = controller->FindAnimationScene(session);
+  pqAnimationScene* scene = this->Internals->Scene;
+
+  vtkSMProxy* sceneProxy = scene ? scene->getProxy() : nullptr;
+
   if (!sceneProxy)
   {
     // The sceneProxy may be null when cleaning up a session. Hence,
@@ -334,22 +358,20 @@ void pqTimeInspectorWidget::updateScene()
     return;
   }
 
-  this->Internals->Ui.AnimationTimeWidget->setAnimationScene(sceneProxy);
+  this->Internals->Ui.AnimationTimeWidget->setAnimationScene(scene);
 
-  links.addPropertyLink(this, "sceneStartTime", SIGNAL(dummySignal()), sceneProxy,
+  links.addTraceablePropertyLink(this, "sceneStartTime", SIGNAL(dummySignal()), sceneProxy,
     sceneProxy->GetProperty("StartTime"));
-  links.addPropertyLink(
+  links.addTraceablePropertyLink(
     this, "sceneEndTime", SIGNAL(dummySignal()), sceneProxy, sceneProxy->GetProperty("EndTime"));
-  links.addPropertyLink(
+  links.addTraceablePropertyLink(
     this, "scenePlayMode", SIGNAL(dummySignal()), sceneProxy, sceneProxy->GetProperty("PlayMode"));
-  links.addPropertyLink(this, "sceneNumberOfFrames", SIGNAL(dummySignal()), sceneProxy,
+  links.addTraceablePropertyLink(this, "sceneNumberOfFrames", SIGNAL(dummySignal()), sceneProxy,
     sceneProxy->GetProperty("NumberOfFrames"));
-  links.addPropertyLink(this, "sceneCurrentTime", SIGNAL(sceneCurrentTimeChanged()), sceneProxy,
-    sceneProxy->GetProperty("AnimationTime"));
   // FIXME: update ticks based on play mode.
 
   vtkSMProxy* timeKeeper = controller->FindTimeKeeper(session);
-  Q_ASSERT(timeKeeper);
+  assert(timeKeeper);
   links.addPropertyLink(this, "sceneTimeSteps", SIGNAL(dummySignal()), timeKeeper,
     timeKeeper->GetProperty("TimestepValues"));
   links.addPropertyLink<PropertyLinksConnection>(
@@ -363,7 +385,7 @@ void pqTimeInspectorWidget::updateScene()
 void pqTimeInspectorWidget::setSceneStartTime(double val)
 {
   pqAnimationModel* animationModel = this->Internals->Ui.AnimationWidget->animationModel();
-  Q_ASSERT(animationModel);
+  assert(animationModel);
   animationModel->setStartTime(val);
 }
 
@@ -371,7 +393,7 @@ void pqTimeInspectorWidget::setSceneStartTime(double val)
 double pqTimeInspectorWidget::sceneStartTime() const
 {
   pqAnimationModel* animationModel = this->Internals->Ui.AnimationWidget->animationModel();
-  Q_ASSERT(animationModel);
+  assert(animationModel);
   return animationModel->startTime();
 }
 
@@ -379,7 +401,7 @@ double pqTimeInspectorWidget::sceneStartTime() const
 void pqTimeInspectorWidget::setSceneEndTime(double val)
 {
   pqAnimationModel* animationModel = this->Internals->Ui.AnimationWidget->animationModel();
-  Q_ASSERT(animationModel);
+  assert(animationModel);
   animationModel->setEndTime(val);
 }
 
@@ -387,7 +409,7 @@ void pqTimeInspectorWidget::setSceneEndTime(double val)
 double pqTimeInspectorWidget::sceneEndTime() const
 {
   pqAnimationModel* animationModel = this->Internals->Ui.AnimationWidget->animationModel();
-  Q_ASSERT(animationModel);
+  assert(animationModel);
   return animationModel->endTime();
 }
 
@@ -395,7 +417,7 @@ double pqTimeInspectorWidget::sceneEndTime() const
 void pqTimeInspectorWidget::setScenePlayMode(const QString& val)
 {
   pqAnimationModel* animationModel = this->Internals->Ui.AnimationWidget->animationModel();
-  Q_ASSERT(animationModel);
+  assert(animationModel);
   if (val == "Sequence")
   {
     animationModel->setMode(pqAnimationModel::Sequence);
@@ -418,7 +440,7 @@ void pqTimeInspectorWidget::setScenePlayMode(const QString& val)
 QString pqTimeInspectorWidget::scenePlayMode() const
 {
   pqAnimationModel* animationModel = this->Internals->Ui.AnimationWidget->animationModel();
-  Q_ASSERT(animationModel);
+  assert(animationModel);
   switch (animationModel->mode())
   {
     case pqAnimationModel::Real:
@@ -437,7 +459,7 @@ QString pqTimeInspectorWidget::scenePlayMode() const
 void pqTimeInspectorWidget::setSceneTimeSteps(const QList<QVariant>& val)
 {
   pqAnimationModel* animationModel = this->Internals->Ui.AnimationWidget->animationModel();
-  Q_ASSERT(animationModel);
+  assert(animationModel);
   std::vector<double> timeSteps;
   foreach (const QVariant& v, val)
   {
@@ -462,7 +484,7 @@ void pqTimeInspectorWidget::setSceneTimeSteps(const QList<QVariant>& val)
 QList<QVariant> pqTimeInspectorWidget::sceneTimeSteps() const
 {
   pqAnimationModel* animationModel = this->Internals->Ui.AnimationWidget->animationModel();
-  Q_ASSERT(animationModel);
+  assert(animationModel);
   QList<QVariant> reply;
   foreach (double val, animationModel->customTicks())
   {
@@ -475,7 +497,7 @@ QList<QVariant> pqTimeInspectorWidget::sceneTimeSteps() const
 void pqTimeInspectorWidget::setSceneNumberOfFrames(int val)
 {
   pqAnimationModel* animationModel = this->Internals->Ui.AnimationWidget->animationModel();
-  Q_ASSERT(animationModel);
+  assert(animationModel);
   animationModel->setTicks(val);
 }
 
@@ -483,7 +505,7 @@ void pqTimeInspectorWidget::setSceneNumberOfFrames(int val)
 int pqTimeInspectorWidget::sceneNumberOfFrames() const
 {
   pqAnimationModel* animationModel = this->Internals->Ui.AnimationWidget->animationModel();
-  Q_ASSERT(animationModel);
+  assert(animationModel);
   return animationModel->ticks();
 }
 
@@ -491,7 +513,7 @@ int pqTimeInspectorWidget::sceneNumberOfFrames() const
 void pqTimeInspectorWidget::setTimeSources(const QList<QVariant>& value)
 {
   pqAnimationModel* animationModel = this->Internals->Ui.AnimationWidget->animationModel();
-  Q_ASSERT(animationModel);
+  assert(animationModel);
 
   QSet<vtkSMProxy*> proxies;
   foreach (const QVariant& val, value)
@@ -504,7 +526,7 @@ void pqTimeInspectorWidget::setTimeSources(const QList<QVariant>& value)
   for (int max = animationModel->count(), cc = max - 1; cc >= 0; cc--)
   {
     TimeTrack* track = dynamic_cast<TimeTrack*>(animationModel->track(cc));
-    Q_ASSERT(track);
+    assert(track);
     if (proxies.remove(track->source()) == false)
     {
       animationModel->removeTrack(track);
@@ -517,7 +539,7 @@ void pqTimeInspectorWidget::setTimeSources(const QList<QVariant>& value)
       TimeTrack* track = new TimeTrack(proxy, animationModel);
       animationModel->addTrack(track);
       pqProxy* pqproxy = getPQProxy(proxy);
-      Q_ASSERT(pqproxy);
+      assert(pqproxy);
       track->setProperty(pqproxy->getSMName());
       track->setEnabled(true);
     }
@@ -534,7 +556,7 @@ QList<QVariant> pqTimeInspectorWidget::timeSources() const
 void pqTimeInspectorWidget::setSuppressedTimeSources(const QList<QVariant>& value)
 {
   pqAnimationModel* animationModel = this->Internals->Ui.AnimationWidget->animationModel();
-  Q_ASSERT(animationModel);
+  assert(animationModel);
 
   this->Internals->SuppressedTimeSources = value;
   QSet<vtkSMProxy*> proxies;
@@ -547,7 +569,7 @@ void pqTimeInspectorWidget::setSuppressedTimeSources(const QList<QVariant>& valu
   for (int max = animationModel->count(), cc = max - 1; cc >= 0; cc--)
   {
     TimeTrack* track = dynamic_cast<TimeTrack*>(animationModel->track(cc));
-    Q_ASSERT(track);
+    assert(track);
     track->setEnabled(!proxies.contains(track->source()));
   }
 }
@@ -559,27 +581,36 @@ QList<QVariant> pqTimeInspectorWidget::suppressedTimeSources() const
 }
 
 //-----------------------------------------------------------------------------
-double pqTimeInspectorWidget::sceneCurrentTime() const
+void pqTimeInspectorWidget::setSceneCurrentTime(double time)
 {
-  pqAnimationModel* animationModel = this->Internals->Ui.AnimationWidget->animationModel();
-  Q_ASSERT(animationModel);
-  return animationModel->currentTime();
+  BEGIN_UNDO_EXCLUDE();
+
+  vtkSMProxy* animationScene = this->Internals->Scene->getProxy();
+  {
+    // Use another scope to prevent modifications to the TimeKeeper from
+    // being traced.
+    SM_SCOPED_TRACE(PropertiesModified).arg("proxy", animationScene);
+    vtkSMPropertyHelper(animationScene, "AnimationTime").Set(time);
+  }
+  animationScene->UpdateVTKObjects();
+
+  END_UNDO_EXCLUDE();
 }
 
 //-----------------------------------------------------------------------------
-void pqTimeInspectorWidget::setSceneCurrentTime(double time)
+void pqTimeInspectorWidget::updateSceneTime()
 {
-  pqAnimationModel* animationModel = this->Internals->Ui.AnimationWidget->animationModel();
-  Q_ASSERT(animationModel);
-  animationModel->setCurrentTime(time);
-  emit this->sceneCurrentTimeChanged();
+  double time = this->Internals->Scene->getAnimationTime();
+
+  pqAnimationModel* animModel = this->Internals->Ui.AnimationWidget->animationModel();
+  animModel->setCurrentTime(time);
 }
 
 //-----------------------------------------------------------------------------
 void pqTimeInspectorWidget::toggleTrackSuppression(pqAnimationTrack* track)
 {
   TimeTrack* ttrack = dynamic_cast<TimeTrack*>(track);
-  Q_ASSERT(ttrack);
+  assert(ttrack);
 
   bool suppress = ttrack->isEnabled();
 
@@ -602,7 +633,7 @@ void pqTimeInspectorWidget::toggleTrackSuppression(pqAnimationTrack* track)
     }
     this->Internals->SuppressedTimeSources = newValue;
   }
-  emit this->suppressedTimeSourcesChanged();
+  Q_EMIT this->suppressedTimeSourcesChanged();
 }
 
 //-----------------------------------------------------------------------------
@@ -612,11 +643,11 @@ void pqTimeInspectorWidget::handleProxyNameChanged(pqServerManagerModelItem* ite
   if (pqproxy)
   {
     pqAnimationModel* animationModel = this->Internals->Ui.AnimationWidget->animationModel();
-    Q_ASSERT(animationModel);
+    assert(animationModel);
     for (int max = animationModel->count(), cc = max - 1; cc >= 0; cc--)
     {
       TimeTrack* track = dynamic_cast<TimeTrack*>(animationModel->track(cc));
-      Q_ASSERT(track);
+      assert(track);
       if (track->source() == pqproxy->getProxy())
       {
         track->setProperty(pqproxy->getSMName());
@@ -628,10 +659,30 @@ void pqTimeInspectorWidget::handleProxyNameChanged(pqServerManagerModelItem* ite
 //-----------------------------------------------------------------------------
 void pqTimeInspectorWidget::generalSettingsChanged()
 {
-  int timePrecision = vtkPVGeneralSettings::GetInstance()->GetAnimationTimePrecision();
-  this->Internals->Ui.AnimationTimeWidget->setTimePrecision(timePrecision);
+  const int timePrecision = vtkPVGeneralSettings::GetInstance()->GetAnimationTimePrecision();
+  this->Internals->Ui.AnimationTimeWidget->setPrecision(timePrecision);
   this->Internals->Ui.AnimationWidget->animationModel()->setTimePrecision(timePrecision);
-  char timeNotation = vtkPVGeneralSettings::GetInstance()->GetAnimationTimeNotation();
-  this->Internals->Ui.AnimationTimeWidget->setTimeNotation(timeNotation);
-  this->Internals->Ui.AnimationWidget->animationModel()->setTimeNotation(timeNotation);
+
+  const int timeNotation = vtkPVGeneralSettings::GetInstance()->GetAnimationTimeNotation();
+  this->Internals->Ui.AnimationTimeWidget->setNotation(
+    static_cast<pqAnimationTimeWidget::RealNumberNotation>(timeNotation));
+
+  QChar cnotation;
+  switch (timeNotation)
+  {
+    case vtkPVGeneralSettings::FIXED:
+      cnotation = 'f';
+      break;
+
+    case vtkPVGeneralSettings::SCIENTIFIC:
+      cnotation = 'e';
+      break;
+
+    case vtkPVGeneralSettings::MIXED:
+    default:
+      cnotation = 'g';
+      break;
+  }
+
+  this->Internals->Ui.AnimationWidget->animationModel()->setTimeNotation(cnotation);
 }

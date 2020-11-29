@@ -39,7 +39,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "vtkSMDomain.h"
 #include "vtkSMDomainIterator.h"
 #include "vtkSMInputProperty.h"
-#include "vtkSMParaViewPipelineController.h"
+#include "vtkSMParaViewPipelineControllerWithRendering.h"
 #include "vtkSMPropertyHelper.h"
 #include "vtkSMPropertyIterator.h"
 #include "vtkSMRenderViewProxy.h"
@@ -50,6 +50,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "vtkSMSourceProxy.h"
 #include "vtkSMStringVectorProperty.h"
 #include "vtkSMTransferFunctionManager.h"
+#include "vtkSMViewLayoutProxy.h"
 #include "vtkSmartPointer.h"
 
 #include <QApplication>
@@ -78,6 +79,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <windows.h>
 #endif
 
+#include <cassert>
 #include <chrono>
 
 namespace pqObjectBuilderNS
@@ -159,8 +161,8 @@ pqPipelineSource* pqObjectBuilder::createSource(
   }
 
   pqPipelineSource* source = pqObjectBuilderNS::postCreatePipelineProxy(controller, proxy, server);
-  emit this->sourceCreated(source);
-  emit this->proxyCreated(source);
+  Q_EMIT this->sourceCreated(source);
+  Q_EMIT this->proxyCreated(source);
   return source;
 }
 
@@ -199,8 +201,8 @@ pqPipelineSource* pqObjectBuilder::createFilter(const QString& sm_group, const Q
   }
 
   pqPipelineSource* filter = pqObjectBuilderNS::postCreatePipelineProxy(controller, proxy, server);
-  emit this->filterCreated(filter);
-  emit this->proxyCreated(filter);
+  Q_EMIT this->filterCreated(filter);
+  Q_EMIT this->proxyCreated(filter);
   return filter;
 }
 
@@ -305,10 +307,10 @@ pqPipelineSource* pqObjectBuilder::createReader(
 
   pqPipelineSource* reader =
     pqObjectBuilderNS::postCreatePipelineProxy(controller, proxy, server, reg_name);
-  emit this->readerCreated(reader, files[0]);
-  emit this->readerCreated(reader, files);
-  emit this->sourceCreated(reader);
-  emit this->proxyCreated(reader);
+  Q_EMIT this->readerCreated(reader, files[0]);
+  Q_EMIT this->readerCreated(reader, files);
+  Q_EMIT this->sourceCreated(reader);
+  Q_EMIT this->proxyCreated(reader);
   return reader;
 }
 //-----------------------------------------------------------------------------
@@ -326,14 +328,14 @@ void pqObjectBuilder::destroy(pqPipelineSource* source)
     return;
   }
 
-  emit this->destroying(source);
+  Q_EMIT this->destroying(source);
 
   vtkNew<vtkSMParaViewPipelineController> controller;
   controller->UnRegisterProxy(source->getProxy());
 }
 
 //-----------------------------------------------------------------------------
-pqView* pqObjectBuilder::createView(const QString& type, pqServer* server, bool detachedFromLayout)
+pqView* pqObjectBuilder::createView(const QString& type, pqServer* server)
 {
   if (!server)
   {
@@ -349,14 +351,10 @@ pqView* pqObjectBuilder::createView(const QString& type, pqServer* server, bool 
     qDebug() << "Failed to create a proxy for the requested view type:" << type;
     return NULL;
   }
-  if (detachedFromLayout)
-  {
-    proxy->SetAnnotation("ParaView::DetachedFromLayout", "true");
-  }
 
   // notify the world that we may create a new view. applications may handle
   // this by setting up layouts, etc.
-  emit this->aboutToCreateView(server);
+  Q_EMIT this->aboutToCreateView(server);
 
   vtkNew<vtkSMParaViewPipelineController> controller;
   controller->PreInitializeProxy(proxy);
@@ -367,8 +365,8 @@ pqView* pqObjectBuilder::createView(const QString& type, pqServer* server, bool 
   pqView* view = model->findItem<pqView*>(proxy);
   if (view)
   {
-    emit this->viewCreated(view);
-    emit this->proxyCreated(view);
+    Q_EMIT this->viewCreated(view);
+    Q_EMIT this->proxyCreated(view);
   }
   else
   {
@@ -378,6 +376,14 @@ pqView* pqObjectBuilder::createView(const QString& type, pqServer* server, bool 
 }
 
 //-----------------------------------------------------------------------------
+#if !defined(VTK_LEGACY_REMOVE)
+pqView* pqObjectBuilder::createView(const QString& type, pqServer* server, bool)
+{
+  return this->createView(type, server);
+}
+#endif
+
+//-----------------------------------------------------------------------------
 void pqObjectBuilder::destroy(pqView* view)
 {
   if (!view)
@@ -385,9 +391,20 @@ void pqObjectBuilder::destroy(pqView* view)
     return;
   }
 
-  emit this->destroying(view);
+  Q_EMIT this->destroying(view);
   vtkNew<vtkSMParaViewPipelineController> controller;
   controller->UnRegisterProxy(view->getProxy());
+}
+
+//-----------------------------------------------------------------------------
+void pqObjectBuilder::addToLayout(pqView* view, pqProxy* layout)
+{
+  if (view)
+  {
+    vtkNew<vtkSMParaViewPipelineControllerWithRendering> controller;
+    controller->AssignViewToLayout(view->getViewProxy(),
+      vtkSMViewLayoutProxy::SafeDownCast(layout ? layout->getProxy() : nullptr));
+  }
 }
 
 //-----------------------------------------------------------------------------
@@ -449,8 +466,8 @@ pqDataRepresentation* pqObjectBuilder::createDataRepresentation(
     core->getServerManagerModel()->findItem<pqDataRepresentation*>(reprProxy);
   if (repr)
   {
-    emit this->dataRepresentationCreated(repr);
-    emit this->proxyCreated(repr);
+    Q_EMIT this->dataRepresentationCreated(repr);
+    Q_EMIT this->proxyCreated(repr);
   }
   return repr;
 }
@@ -497,7 +514,7 @@ void pqObjectBuilder::destroy(pqRepresentation* repr)
     return;
   }
 
-  emit this->destroying(repr);
+  Q_EMIT this->destroying(repr);
 
   // Remove repr from the view module.
   pqView* view = repr->getView();
@@ -531,7 +548,7 @@ void pqObjectBuilder::destroy(pqRepresentation* repr)
 //-----------------------------------------------------------------------------
 void pqObjectBuilder::destroy(pqProxy* proxy)
 {
-  emit this->destroying(proxy);
+  Q_EMIT this->destroying(proxy);
 
   this->destroyProxyInternal(proxy);
 }
@@ -611,7 +628,7 @@ void pqObjectBuilder::destroyProxyInternal(pqProxy* proxy)
 QString pqObjectBuilder::getFileNamePropertyName(vtkSMProxy* proxy)
 {
   const char* fname = vtkSMCoreUtilities::GetFileNameProperty(proxy);
-  return fname ? QString(fname) : QString::Null();
+  return fname ? QString(fname) : QString();
 }
 
 //-----------------------------------------------------------------------------
@@ -709,7 +726,7 @@ pqServer* pqObjectBuilder::createServer(const pqServerResource& resource, int co
   if (id != 0)
   {
     server = smModel->findServer(id);
-    emit this->finishedAddingServer(server);
+    Q_EMIT this->finishedAddingServer(server);
   }
   this->WaitingForConnection = false;
   return server;
@@ -734,7 +751,7 @@ void pqObjectBuilder::removeServer(pqServer* server)
 //-----------------------------------------------------------------------------
 pqServer* pqObjectBuilder::resetServer(pqServer* server)
 {
-  Q_ASSERT(server);
+  assert(server);
 
   // save the current remaining lifetime to restore it
   // when we recreate the server following reset.
@@ -775,7 +792,7 @@ pqServer* pqObjectBuilder::resetServer(pqServer* server)
     auto deltaMinutes = std::chrono::duration_cast<std::chrono::minutes>(endTime - startTime);
     newServer->setRemainingLifeTime(
       remainingLifetime > 0 ? (remainingLifetime - deltaMinutes.count()) : remainingLifetime);
-    emit this->finishedAddingServer(newServer);
+    Q_EMIT this->finishedAddingServer(newServer);
   }
   return newServer;
 }

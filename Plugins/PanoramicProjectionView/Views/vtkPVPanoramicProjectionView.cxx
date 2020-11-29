@@ -24,10 +24,8 @@
 vtkStandardNewMacro(vtkPVPanoramicProjectionView);
 
 //----------------------------------------------------------------------------
-void vtkPVPanoramicProjectionView::Initialize(unsigned int id)
+vtkPVPanoramicProjectionView::vtkPVPanoramicProjectionView()
 {
-  this->Superclass::Initialize(id);
-
   this->SynchronizedRenderers->SetImageProcessingPass(this->ProjectionPass);
 
   // remove cullers
@@ -56,6 +54,12 @@ void vtkPVPanoramicProjectionView::SetCubeResolution(int resolution)
 void vtkPVPanoramicProjectionView::SetAngle(double angle)
 {
   this->ProjectionPass->SetAngle(angle);
+}
+
+//----------------------------------------------------------------------------
+void vtkPVPanoramicProjectionView::SetCubemapInterpolation(bool interpolate)
+{
+  this->ProjectionPass->SetInterpolate(interpolate);
 }
 
 //----------------------------------------------------------------------------

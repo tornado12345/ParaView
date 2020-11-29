@@ -55,21 +55,16 @@ void pqAnimationTimeToolbar::constructor()
 //-----------------------------------------------------------------------------
 void pqAnimationTimeToolbar::setAnimationScene(pqAnimationScene* scene)
 {
-  this->AnimationTimeWidget->setAnimationScene(scene ? scene->getProxy() : NULL);
+  this->AnimationTimeWidget->setAnimationScene(scene);
 }
 
 //-----------------------------------------------------------------------------
 void pqAnimationTimeToolbar::updateTimeDisplay()
 {
-  if (this->AnimationTimeWidget->timePrecision() !=
-    vtkPVGeneralSettings::GetInstance()->GetAnimationTimePrecision())
-  {
-    this->AnimationTimeWidget->setTimePrecision(
-      vtkPVGeneralSettings::GetInstance()->GetAnimationTimePrecision());
-  }
-
-  this->AnimationTimeWidget->setTimeNotation(
-    vtkPVGeneralSettings::GetInstance()->GetAnimationTimeNotation());
+  this->AnimationTimeWidget->setPrecision(
+    vtkPVGeneralSettings::GetInstance()->GetAnimationTimePrecision());
+  this->AnimationTimeWidget->setNotation(static_cast<pqAnimationTimeWidget::RealNumberNotation>(
+    vtkPVGeneralSettings::GetInstance()->GetAnimationTimeNotation()));
 }
 
 //-----------------------------------------------------------------------------

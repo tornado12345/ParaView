@@ -12,12 +12,12 @@ paraview_client_add(
   VERSION <version>
   SOURCES <source>...
   [APPLICATION_XMLS <xml>...]
-  [QCH_FILE <file>]
+  [QCH_FILES <file>...]
 
   [MAIN_WINDOW_CLASS    <class>]
   [MAIN_WINDOW_INCLUDE  <include>]
 
-  [PLUGINS_TARGET   <target>]
+  [PLUGINS_TARGETS  <target>...]
   [REQUIRED_PLUGINS <plugin>...]
   [OPTIONAL_PLUGINS <plugin>...]
 
@@ -37,8 +37,7 @@ paraview_client_add(
   [FORCE_UNIX_LAYOUT    <ON|OFF>]
   [BUNDLE_DESTINATION   <directory>]
   [RUNTIME_DESTINATION  <directory>]
-  [LIBRARY_DESTINATION  <directory>]
-  [FORWARD_EXECUTABLE   <ON|OFF>]
+  [LIBRARY_DESTINATION  <directory>])
 ```
 
   * `NAME`: (Required) The name of the application. This is used as the target
@@ -46,13 +45,13 @@ paraview_client_add(
   * `VERSION`: (Required) The version of the application.
   * `SOURCES`: (Required) Source files for the application.
   * `APPLICATION_XMLS`: Server manager XML files.
-  * `QCH_FILE`: The `.qch` file containing documentation.
+  * `QCH_FILES`: Any `.qch` files containing documentation.
   * `MAIN_WINDOW_CLASS`: (Defaults to `QMainWindow`) The name of the main
     window class.
   * `MAIN_WINDOW_INCLUDE`: (Defaults to `QMainWindow` or
     `<MAIN_WINDOW_CLASS>.h` if it is specified) The include file for the main
     window.
-  * `PLUGINS_TARGET`: The target for static plugins. The associated function
+  * `PLUGINS_TARGETS`: The targets for plugins. The associated functions
     will be called upon startup.
   * `REQUIRED_PLUGINS`: Plugins to load upon startup.
   * `OPTIONAL_PLUGINS`: Plugins to load upon startup if available.
@@ -61,8 +60,7 @@ paraview_client_add(
   * `ORGANIZATION`: (Defaults to `Anonymous`) The organization for the
     application. This is used for the macOS GUI identifier.
   * `TITLE`: The window title for the application.
-  * `DEFAULT_STYLE`: (Defaults to `plastique`) The default Qt style for the
-    application.
+  * `DEFAULT_STYLE`: The default Qt style for the application.
   * `APPLICATION_ICON`: The path to the icon for the Windows application.
   * `BUNDLE_ICON`: The path to the icon for the macOS bundle.
   * `BUNDLE_PLIST`: The path to the `Info.plist.in` template.
@@ -77,17 +75,15 @@ paraview_client_add(
     bundle executable.
   * `RUNTIME_DESTINATION`: (Defaults to `${CMAKE_INSTALL_BINDIR}`) Where to
     place the binary.
-  * `LIBRARY_DESTINATION`: (Defaults to `${CMAKE_INSTALL_LIBDIR}`) Where to
-    place libraries. Only used if `FORWARD_EXECUTABLE` is `ON`.
-  * `FORWARD_EXECUTABLE`: (Deprecated) (Defaults to `OFF`) On non-macOS Unix
-    platforms, create a binary to set up `LD_LIBRARY_PATH` for the real
-    executable.
+  * `LIBRARY_DESTINATION`: (Defaults to `${CMAKE_INSTALL_LIBDIR}`) Where
+    libraries are placed. Sets up `RPATH` on ELF platforms (e.g., Linux and the
+    BSD family).
 #]==]
 function (paraview_client_add)
   cmake_parse_arguments(_paraview_client
     ""
-    "NAME;APPLICATION_NAME;ORGANIZATION;TITLE;SPLASH_IMAGE;BUNDLE_DESTINATION;BUNDLE_ICON;BUNDLE_PLIST;APPLICATION_ICON;MAIN_WINDOW_CLASS;MAIN_WINDOW_INCLUDE;VERSION;FORCE_UNIX_LAYOUT;PLUGINS_TARGET;DEFAULT_STYLE;FORWARD_EXECUTABLE;RUNTIME_DESTINATION;LIBRARY_DESTINATION;NAMESPACE;EXPORT"
-    "REQUIRED_PLUGINS;OPTIONAL_PLUGINS;APPLICATION_XMLS;SOURCES;QCH_FILE"
+    "NAME;APPLICATION_NAME;ORGANIZATION;TITLE;SPLASH_IMAGE;BUNDLE_DESTINATION;BUNDLE_ICON;BUNDLE_PLIST;APPLICATION_ICON;MAIN_WINDOW_CLASS;MAIN_WINDOW_INCLUDE;VERSION;FORCE_UNIX_LAYOUT;PLUGINS_TARGET;DEFAULT_STYLE;RUNTIME_DESTINATION;LIBRARY_DESTINATION;NAMESPACE;EXPORT"
+    "REQUIRED_PLUGINS;OPTIONAL_PLUGINS;APPLICATION_XMLS;SOURCES;QCH_FILES;QCH_FILE;PLUGINS_TARGETS"
     ${ARGN})
 
   if (_paraview_client_UNPARSED_ARGUMENTS)
@@ -97,6 +93,20 @@ function (paraview_client_add)
   endif ()
 
   # TODO: Installation.
+
+  if (DEFINED _paraview_client_PLUGINS_TARGET)
+    if (DEFINED _paraview_client_PLUGINS_TARGETS)
+      message(FATAL_ERROR
+        "The `paraview_client_add(PLUGINS_TARGET)` argument is incompatible "
+        "with `PLUGINS_TARGETS`.")
+    else ()
+      message(DEPRECATION
+        "The `paraview_client_add(PLUGINS_TARGET)` argument is deprecated in "
+        "favor of `PLUGINS_TARGETS`.")
+      set(_paraview_client_PLUGINS_TARGETS
+        "${_paraview_client_PLUGINS_TARGET}")
+    endif ()
+  endif ()
 
   if (NOT DEFINED _paraview_client_NAME)
     message(FATAL_ERROR
@@ -128,11 +138,6 @@ function (paraview_client_add)
       OFF)
   endif ()
 
-  if (NOT DEFINED _paraview_client_DEFAULT_STYLE)
-    set(_paraview_client_DEFAULT_STYLE
-      "plastique")
-  endif ()
-
   if (NOT DEFINED _paraview_client_BUNDLE_DESTINATION)
     set(_paraview_client_BUNDLE_DESTINATION
       "Applications")
@@ -148,10 +153,18 @@ function (paraview_client_add)
       "${CMAKE_INSTALL_LIBDIR}")
   endif ()
 
-  if (NOT DEFINED _paraview_client_FORWARD_EXECUTABLE)
-    #message(DEPRECATION
-    #  "The `FORWARD_EXECUTABLE` argument is deprecated.")
-    set(_paraview_client_FORWARD_EXECUTABLE OFF)
+  if (DEFINED _paraview_client_QCH_FILE)
+    if (DEFINED _paraview_client_QCH_FILES)
+      message(FATAL_ERROR
+        "The `paraview_client_add(QCH_FILE)` argument is incompatible "
+        "with `QCH_FILES`.")
+    else ()
+      message(DEPRECATION
+        "The `paraview_client_add(QCH_FILE)` argument is deprecated in "
+        "favor of `QCH_FILES`.")
+      set(_paraview_client_QCH_FILES
+        "${_paraview_client_QCH_FILE}")
+    endif ()
   endif ()
 
   if (NOT DEFINED _paraview_client_MAIN_WINDOW_CLASS)
@@ -193,14 +206,14 @@ IDI_ICON1 ICON \"${_paraview_client_APPLICATION_ICON}\"\n")
         "${_paraview_client_appicon_file}")
     endif ()
 
-    set(_paraview_client_executable_flags
+    list(APPEND _paraview_client_executable_flags
       WIN32)
   elseif (APPLE)
     # TODO: nib files
 
-    set(_paraview_client_bundle_args
+    list(APPEND _paraview_client_bundle_args
       BUNDLE DESTINATION "${_paraview_client_BUNDLE_DESTINATION}")
-    set(_paraview_client_executable_flags
+    list(APPEND _paraview_client_executable_flags
       MACOSX_BUNDLE)
   endif ()
 
@@ -213,7 +226,7 @@ IDI_ICON1 ICON \"${_paraview_client_APPLICATION_ICON}\"\n")
     set(_paraview_client_splash_image_name
       "${_paraview_client_splash_base_name}.img")
     set(_paraview_client_splash_resource
-      ":/${_paraview_client_NAME}/${_paraview_client_splash_image_name}")
+      ":/${_paraview_client_NAME}/${_paraview_client_splash_base_name}")
 
     set(_paraview_client_splash_resource_file
       "${CMAKE_CURRENT_BINARY_DIR}/${_paraview_client_splash_base_name}.qrc")
@@ -249,7 +262,7 @@ IDI_ICON1 ICON \"${_paraview_client_APPLICATION_ICON}\"\n")
     set(CMAKE_AUTORCC 1)
   endif ()
 
-  if (DEFINED _paraview_client_QCH_FILE)
+  if (DEFINED _paraview_client_QCH_FILES)
     set(_paraview_client_documentation_base_name
       "${_paraview_client_NAME}_documentation")
     set(_paraview_client_documentation_resource_file
@@ -259,10 +272,10 @@ IDI_ICON1 ICON \"${_paraview_client_APPLICATION_ICON}\"\n")
       OUTPUT  "${_paraview_client_documentation_resource_file}"
       # This prefix is part of the API.
       PREFIX  "/${_paraview_client_NAME}/Documentation"
-      FILES   "${_paraview_client_QCH_FILE}")
+      FILES   ${_paraview_client_QCH_FILES})
     set_property(SOURCE "${_paraview_client_documentation_resource_file}"
       PROPERTY
-        OBJECT_DEPENDS "${_paraview_client_QCH_FILE}")
+        OBJECT_DEPENDS "${_paraview_client_QCH_FILES}")
 
     list(APPEND _paraview_client_resource_files
       "${_paraview_client_documentation_resource_file}")
@@ -271,6 +284,7 @@ IDI_ICON1 ICON \"${_paraview_client_APPLICATION_ICON}\"\n")
     set(CMAKE_AUTORCC 1)
   endif ()
 
+  include("${_ParaViewClient_cmake_dir}/paraview-find-package-helpers.cmake" OPTIONAL)
   find_package(Qt5 REQUIRED QUIET COMPONENTS Core Widgets)
 
   # CMake 3.13 started using Qt5's version variables to detect what version
@@ -290,6 +304,25 @@ IDI_ICON1 ICON \"${_paraview_client_APPLICATION_ICON}\"\n")
     PROPERTY
       Qt5Core_VERSION_MINOR "${Qt5Core_VERSION_MAJOR}")
 
+  set(_paraview_client_built_shared 0)
+  if (BUILD_SHARED_LIBS)
+    set(_paraview_client_built_shared 1)
+  endif ()
+
+  set(_paraview_client_have_plugins 0)
+  set(_paraview_client_plugins_includes)
+  set(_paraview_client_plugins_calls)
+  if (_paraview_client_PLUGINS_TARGETS)
+    set(_paraview_client_have_plugins 1)
+    foreach (_paraview_client_plugin_target IN LISTS _paraview_client_PLUGINS_TARGETS)
+      string(REPLACE "::" "_" _paraview_client_plugin_target_safe "${_paraview_client_plugin_target}")
+      string(APPEND _paraview_client_plugins_includes
+        "#include \"${_paraview_client_plugin_target_safe}.h\"\n")
+      string(APPEND _paraview_client_plugins_calls
+        "  ${_paraview_client_plugin_target_safe}_initialize();\n")
+    endforeach ()
+  endif ()
+
   set(_paraview_client_source_files
     "${CMAKE_CURRENT_BINARY_DIR}/${_paraview_client_NAME}_main.cxx"
     "${CMAKE_CURRENT_BINARY_DIR}/pq${_paraview_client_NAME}Initializer.cxx"
@@ -306,6 +339,19 @@ IDI_ICON1 ICON \"${_paraview_client_APPLICATION_ICON}\"\n")
     "${_ParaViewClient_cmake_dir}/paraview_client_initializer.h.in"
     "${CMAKE_CURRENT_BINARY_DIR}/pq${_paraview_client_NAME}Initializer.h"
     @ONLY)
+
+  # Set up rpaths
+  set(CMAKE_BUILD_RPATH_USE_ORIGIN 1)
+  if (UNIX AND NOT APPLE)
+    file(RELATIVE_PATH _paraview_client_relpath
+      "/prefix/${_paraview_client_RUNTIME_DESTINATION}"
+      "/prefix/${_paraview_client_LIBRARY_DESTINATION}")
+    set(_paraview_client_origin_rpath
+      "$ORIGIN/${_paraview_client_relpath}")
+
+    list(APPEND CMAKE_INSTALL_RPATH
+      "${_paraview_client_origin_rpath}")
+  endif ()
 
   if (_paraview_client_resource_files)
     source_group("resources"
@@ -324,87 +370,61 @@ IDI_ICON1 ICON \"${_paraview_client_APPLICATION_ICON}\"\n")
     PRIVATE
       "${CMAKE_CURRENT_SOURCE_DIR}"
       "${CMAKE_CURRENT_BINARY_DIR}"
-      # https://gitlab.kitware.com/cmake/cmake/issues/18049
+      # https://gitlab.kitware.com/cmake/cmake/-/issues/18049
       "$<TARGET_PROPERTY:VTK::vtksys,INTERFACE_INCLUDE_DIRECTORIES>")
   target_link_libraries("${_paraview_client_NAME}"
     PRIVATE
-      Qt5::Widgets
       ParaView::pqApplicationComponents
+      Qt5::Widgets
       VTK::vtksys)
-
-  if (DEFINED _paraview_client_PLUGINS_TARGET)
-    target_link_libraries("${_paraview_client_NAME}"
-      PRIVATE
-        "${_paraview_client_PLUGINS_TARGET}")
-  endif ()
-
-  # Set up the forwarding executable
-  set(_paraview_client_destination "${_paraview_client_RUNTIME_DESTINATION}")
-  if (BUILD_SHARED_LIBS AND UNIX AND NOT APPLE AND _paraview_client_FORWARD_EXECUTABLE)
-    set(_paraview_client_build_dir "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
-    set(_paraview_client_build_path "\"${_paraview_client_build_dir}\"")
-    foreach (_paraview_client_build_path_dir IN LISTS )
-      string(APPEND _paraview_client_build_path
-        ",\"${_paraview_client_build_path_dir}\"")
-    endforeach ()
-    set(_paraview_client_install_dir "../${_paraview_client_LIBRARY_DESTINATION}")
-    set(_paraview_client_install_path "\"${_paraview_client_install_dir}\"")
-    foreach (_paraview_client_install_path_dir IN LISTS )
-      string(APPEND _paraview_client_install_path
-        ",\"${_paraview_client_install_path_dir}\"")
-    endforeach ()
-
-    # Set up variables expected in paraview_launcher.c.in
-    foreach(suffix build_dir build_path install_dir install_path NAME)
-      set(_paraview_launcher_${suffix} ${_paraview_client_${suffix}})
-    endforeach ()
-
-    configure_file(
-      "${_ParaViewClient_cmake_dir}/paraview_launcher.c.in"
-      "${CMAKE_CURRENT_BINARY_DIR}/${_paraview_client_NAME}_launcher.c"
-      @ONLY)
-    add_executable("${_paraview_client_NAME}-launcher"
-      "${CMAKE_CURRENT_BINARY_DIR}/${_paraview_client_NAME}_launcher.c")
-    # https://gitlab.kitware.com/cmake/cmake/issues/18049
-    #target_link_libraries("${_paraview_client_NAME}-launcher"
-    #  PRIVATE
-    #    VTK::vtksys)
-    target_include_directories("${_paraview_client_NAME}-launcher"
-      PRIVATE
-        "$<TARGET_PROPERTY:VTK::vtksys,INTERFACE_INCLUDE_DIRECTORIES>")
-    set_target_properties("${_paraview_client_NAME}-launcher"
-      PROPERTIES
-        OUTPUT_NAME               "${_paraview_client_NAME}"
-        RUNTIME_OUTPUT_DIRECTORY  "${CMAKE_CURRENT_BINARY_DIR}/launcher")
-    add_dependencies("${_paraview_client_NAME}-launcher"
-      "${_paraview_client_NAME}")
-
-    install(
-      TARGETS "${_paraview_client_NAME}-launcher"
-      RUNTIME DESTINATION "${_paraview_client_RUNTIME_DESTINATION}")
-    set(_paraview_client_destination "${_paraview_client_LIBRARY_DESTINATION}")
-  endif ()
 
   set(_paraview_client_export)
   if (DEFINED _paraview_client_EXPORT)
-    set(_paraview_client_export
+    list(APPEND _paraview_client_export
       EXPORT "${_paraview_client_EXPORT}")
   endif ()
 
   install(
     TARGETS "${_paraview_client_NAME}"
     ${_paraview_client_export}
+    COMPONENT "runtime"
     ${_paraview_client_bundle_args}
-    RUNTIME DESTINATION "${_paraview_client_destination}")
+    RUNTIME DESTINATION "${_paraview_client_RUNTIME_DESTINATION}")
+
+  if (DEFINED _paraview_client_PLUGINS_TARGETS)
+    target_link_libraries("${_paraview_client_NAME}"
+      PRIVATE
+        ${_paraview_client_PLUGINS_TARGETS})
+
+    set(_paraview_client_binary_destination
+      "${_paraview_client_RUNTIME_DESTINATION}")
+    set(_paraview_client_conf_destination
+      "${_paraview_client_binary_destination}")
+    if (APPLE)
+      string(APPEND _paraview_client_binary_destination
+        "/${_paraview_client_NAME}.app/Contents/Resources")
+      set(_paraview_client_conf_destination
+        "${_paraview_client_BUNDLE_DESTINATION}/${_paraview_client_NAME}.app/Contents/Resources")
+    endif ()
+
+    paraview_plugin_write_conf(
+      NAME            "${_paraview_client_NAME}"
+      PLUGINS_TARGETS ${_paraview_client_PLUGINS_TARGETS}
+      BUILD_DESTINATION   "${_paraview_client_binary_destination}"
+      INSTALL_DESTINATION "${_paraview_client_conf_destination}"
+      COMPONENT "runtime")
+  endif ()
 
   if (APPLE)
     if (DEFINED _paraview_client_BUNDLE_ICON)
+      get_filename_component(_paraview_client_bundle_icon_file "${_paraview_client_BUNDLE_ICON}" NAME)
       set_property(TARGET "${_paraview_client_NAME}"
         PROPERTY
-          MACOSX_BUNDLE_ICON_FILE "${_paraview_client_BUNDLE_ICON}")
+          MACOSX_BUNDLE_ICON_FILE "${_paraview_client_bundle_icon_file}")
       install(
         FILES       "${_paraview_client_BUNDLE_ICON}"
-        DESTINATION "${_paraview_client_BUNDLE_DESTINATION}/${_paraview_client_APPLICATION_NAME}.app/Contents/Resources")
+        DESTINATION "${_paraview_client_BUNDLE_DESTINATION}/${_paraview_client_APPLICATION_NAME}.app/Contents/Resources"
+        COMPONENT   "runtime")
     endif ()
     if (DEFINED _paraview_client_BUNDLE_PLIST)
       set_property(TARGET "${_paraview_client_NAME}"
@@ -491,9 +511,11 @@ function (paraview_client_documentation)
       "The `XMLS` argument is required.")
   endif ()
 
+  include("${_ParaViewClient_cmake_dir}/paraview-find-package-helpers.cmake" OPTIONAL)
   find_program(qt_xmlpatterns_executable
     NAMES xmlpatterns-qt5 xmlpatterns
     HINTS "${Qt5_DIR}/../../../bin"
+          "${Qt5_DIR}/../../../libexec/qt5/bin"
     DOC   "Path to xmlpatterns")
   mark_as_advanced(qt_xmlpatterns_executable)
 
@@ -509,9 +531,12 @@ function (paraview_client_documentation)
       "${_paraview_client_doc_xml}")
   endforeach ()
 
-  # Escaping in order to pass as an argument.
-  set(_paraview_client_doc_xmls_list "${_paraview_client_doc_xmls}")
-  _paraview_client_escape_cmake_list(_paraview_client_doc_xmls)
+  # Save xmls to a temporary file.
+  set (_paraview_client_doc_xmls_file
+    "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/${_paraview_client_doc_TARGET}-xmls.txt")
+  file(GENERATE
+    OUTPUT "${_paraview_client_doc_xmls_file}"
+    CONTENT "${_paraview_client_doc_xmls}")
 
   add_custom_command(
     OUTPUT  "${_paraview_client_doc_OUTPUT_DIR}/${_paraview_client_doc_TARGET}.xslt"
@@ -520,10 +545,11 @@ function (paraview_client_documentation)
             "-Dxmlpatterns=${qt_xmlpatterns_executable}"
             "-Doutput_dir=${_paraview_client_doc_OUTPUT_DIR}"
             "-Doutput_file=${_paraview_client_doc_OUTPUT_DIR}/${_paraview_client_doc_TARGET}.xslt"
-            "-Dxmls=${_paraview_client_doc_xmls}"
+            "-Dxmls_file=${_paraview_client_doc_xmls_file}"
             -D_paraview_generate_proxy_documentation_run=ON
             -P "${_ParaViewClient_script_file}"
     DEPENDS ${_paraview_client_doc_xmls_list}
+            "${_paraview_client_doc_xmls_file}"
             "${_ParaViewClient_script_file}"
             "${_ParaViewClient_cmake_dir}/paraview_servermanager_convert_xml.xsl"
             "${_ParaViewClient_cmake_dir}/paraview_servermanager_convert_categoryindex.xsl"
@@ -539,7 +565,8 @@ endfunction ()
 
 # Generate proxy documentation.
 if (_paraview_generate_proxy_documentation_run AND CMAKE_SCRIPT_MODE_FILE)
-  _paraview_client_unescape_cmake_list(xmls)
+
+  file(READ "${xmls_file}" xmls)
 
   set(_paraview_gpd_to_xml "${CMAKE_CURRENT_LIST_DIR}/paraview_servermanager_convert_xml.xsl")
   set(_paraview_gpd_to_catindex "${CMAKE_CURRENT_LIST_DIR}/paraview_servermanager_convert_categoryindex.xsl")
@@ -669,6 +696,8 @@ paraview_client_generate_help(
   NAME    <name>
   [TARGET <target>]
 
+  OUTPUT_PATH <var>
+
   [OUTPUT_DIR <directory>]
   [SOURCE_DIR <directory>]
   [PATTERNS   <pattern>...]
@@ -686,6 +715,8 @@ paraview_client_generate_help(
 
   * `NAME`: (Required) The basename of the generated `.qch` file.
   * `TARGET`: (Defaults to `<NAME>`) The name of the generated target.
+  * `OUTPUT_PATH`: (Required) This variable is set to the output path of the
+    generated `.qch` file.
   * `OUTPUT_DIR`: (Defaults to `${CMAKE_CURRENT_BINARY_DIR}`) Where to place
     generated files.
   * `SOURCE_DIR`: Where to copy input files from.
@@ -709,7 +740,7 @@ paraview_client_generate_help(
 function (paraview_client_generate_help)
   cmake_parse_arguments(_paraview_client_help
     ""
-    "NAME;TARGET;OUTPUT_DIR;SOURCE_DIR;NAMESPACE;FOLDER;TABLE_OF_CONTENTS;TABLE_OF_CONTENTS_FILE;RESOURCE_FILE;RESOURCE_PREFIX"
+    "NAME;TARGET;OUTPUT_DIR;SOURCE_DIR;NAMESPACE;FOLDER;TABLE_OF_CONTENTS;TABLE_OF_CONTENTS_FILE;RESOURCE_FILE;RESOURCE_PREFIX;OUTPUT_PATH"
     "PATTERNS;DEPENDS"
     ${ARGN})
 
@@ -724,6 +755,11 @@ function (paraview_client_generate_help)
       "The `NAME` argument is required.")
   endif ()
 
+  if (NOT DEFINED _paraview_client_help_OUTPUT_PATH)
+    message(FATAL_ERROR
+      "The `OUTPUT_PATH` argument is required.")
+  endif ()
+
   if (NOT DEFINED _paraview_client_help_TARGET)
     set(_paraview_client_help_TARGET
       "${_paraview_client_help_NAME}")
@@ -731,7 +767,7 @@ function (paraview_client_generate_help)
 
   if (NOT DEFINED _paraview_client_help_OUTPUT_DIR)
     set(_paraview_client_help_OUTPUT_DIR
-      "${CMAKE_CURRENT_BINARY_DIR}")
+      "${CMAKE_CURRENT_BINARY_DIR}/paraview_help")
   endif ()
 
   if (NOT DEFINED _paraview_client_help_NAMESPACE)
@@ -760,12 +796,13 @@ function (paraview_client_generate_help)
       "*.*")
   endif ()
 
+  include("${_ParaViewClient_cmake_dir}/paraview-find-package-helpers.cmake" OPTIONAL)
   find_package(Qt5 QUIET REQUIRED COMPONENTS Help)
 
   set(_paraview_client_help_copy_sources)
   set(_paraview_client_help_copied_sources)
   if (DEFINED _paraview_client_help_SOURCE_DIR)
-    set(_paraview_client_help_copy_sources
+    list(APPEND _paraview_client_help_copy_sources
       COMMAND "${CMAKE_COMMAND}" -E copy_directory
               "${_paraview_client_help_SOURCE_DIR}"
               "${_paraview_client_help_OUTPUT_DIR}")
@@ -773,6 +810,8 @@ function (paraview_client_generate_help)
     file(GLOB _paraview_client_help_copied_sources
       ${_paraview_client_help_PATTERNS})
   endif ()
+
+  file(MAKE_DIRECTORY "${_paraview_client_help_OUTPUT_DIR}")
 
   set(_paraview_client_help_patterns "${_paraview_client_help_PATTERNS}")
   _paraview_client_escape_cmake_list(_paraview_client_help_patterns)
@@ -798,7 +837,8 @@ function (paraview_client_generate_help)
             -D_paraview_generate_help_run=ON
             -P "${_ParaViewClient_script_file}"
     VERBATIM
-    COMMAND Qt5::qhelpgenerator
+    COMMAND ${CMAKE_CROSSCOMPILING_EMULATOR}
+            $<TARGET_FILE:Qt5::qhelpgenerator>
             "${_paraview_client_help_qhp}"
             -s
             -o "${_paraview_client_help_output}"
@@ -822,6 +862,10 @@ function (paraview_client_generate_help)
       PROPERTY
         OBJECT_DEPENDS "${_paraview_client_help_output}")
   endif ()
+
+  set("${_paraview_client_help_OUTPUT_PATH}"
+    "${_paraview_client_help_output}"
+    PARENT_SCOPE)
 endfunction ()
 
 # Handle the generation of the help file.
@@ -963,9 +1007,11 @@ function (paraview_client_qt_resource)
   get_filename_component(_paraview_client_resource_file_path
     "${_paraview_client_resource_file_path}"
     REALPATH)
-  file(TO_NATIVE_PATH
-    "${_paraview_client_resource_file_path}"
-    _paraview_client_resource_file_path)
+  if (WIN32)
+    file(TO_NATIVE_PATH
+      "${_paraview_client_resource_file_path}"
+      _paraview_client_resource_file_path)
+  endif ()
 
   # We cannot use file(GENERATE) because automoc doesn't like when generated
   # sources are in the source list.
@@ -1038,9 +1084,11 @@ function (paraview_client_qt_resources)
     get_filename_component(_paraview_client_resources_file_path
       "${_paraview_client_resources_file_path}"
       REALPATH)
-    file(TO_NATIVE_PATH
-      "${_paraview_client_resources_file_path}"
-      _paraview_client_resources_file_path)
+    if (WIN32)
+      file(TO_NATIVE_PATH
+        "${_paraview_client_resources_file_path}"
+        _paraview_client_resources_file_path)
+    endif ()
     string(APPEND _paraview_client_resources_contents
       "    <file alias=\"${_paraview_client_resources_alias}\">${_paraview_client_resources_file_path}</file>\n")
   endforeach ()

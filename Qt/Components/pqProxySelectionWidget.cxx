@@ -44,6 +44,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include <QPointer>
 
+#include <cassert>
+
 //-----------------------------------------------------------------------------
 class pqProxySelectionWidget::pqInternal
 {
@@ -113,15 +115,14 @@ pqProxySelectionWidget::pqProxySelectionWidget(
   , Internal(new pqProxySelectionWidget::pqInternal(this))
 {
   this->Internal->Ui.label->setText(smproperty->GetXMLLabel());
-  this->Internal->Domain =
-    vtkSMProxyListDomain::SafeDownCast(smproperty->FindDomain("vtkSMProxyListDomain"));
+  this->Internal->Domain = smproperty->FindDomain<vtkSMProxyListDomain>();
 
   // This widget is intended to be used for properties with ProxyListDomains
   // alone.
-  Q_ASSERT(this->Internal->Domain);
+  assert(this->Internal->Domain);
   this->connect(
     this->Internal->Ui.comboBox, SIGNAL(currentIndexChanged(int)), SLOT(currentIndexChanged(int)));
-  new pqComboBoxDomain(this->Internal->Ui.comboBox, smproperty, "proxy_list");
+  new pqComboBoxDomain(this->Internal->Ui.comboBox, smproperty, this->Internal->Domain);
   this->addPropertyLink(this, "chosenProxy", SIGNAL(chosenProxyChanged()), smproperty);
 
   // If selected_proxy_panel_visibility="advanced" hint is specified, we
@@ -144,7 +145,13 @@ pqProxySelectionWidget::pqProxySelectionWidget(
     int enabled = 1;
     if (hints2->GetScalarAttribute("enabled", &enabled))
     {
-      this->Internal->Ui.comboBox->setEnabled(false);
+      this->Internal->Ui.comboBox->setEnabled(enabled != 0);
+    }
+    int visibility = 1;
+    if (hints2->GetScalarAttribute("visibility", &visibility))
+    {
+      this->Internal->Ui.comboBox->setVisible(visibility != 0);
+      this->Internal->Ui.label->setVisible(visibility != 0);
     }
   }
 }
@@ -175,7 +182,7 @@ void pqProxySelectionWidget::setChosenProxy(vtkSMProxy* cproxy)
         this->Internal->Ui.comboBox->setCurrentIndex(cc);
       }
     }
-    emit this->chosenProxyChanged();
+    Q_EMIT this->chosenProxyChanged();
   }
 }
 

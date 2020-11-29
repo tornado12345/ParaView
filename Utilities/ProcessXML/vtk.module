@@ -2,8 +2,9 @@ NAME
   ParaView::ProcessXML
 LIBRARY_NAME
   vtkProcessXML
+GROUPS
+  PARAVIEW_CORE
 PRIVATE_DEPENDS
-  VTK::CommonCore
   VTK::vtksys
 TEST_LABELS
   ParaView

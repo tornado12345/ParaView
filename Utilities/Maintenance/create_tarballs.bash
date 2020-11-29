@@ -150,12 +150,12 @@ index_data_objects () {
         validate "$algo" "$file" "$hash"
         obj="$( git hash-object -t blob -w "$file" )"
         case "$userealpath" in
-          "1")
-            echo "100644 blob $obj	$realpath"
-            ;;
-          *)
-            echo "100644 blob $obj	$path"
-            ;;
+          "inplace")
+              echo "100644 blob $obj	${realpath%.sha512}"
+              ;;
+          "extdata")
+              echo "100644 blob $obj	$path"
+              ;;
         esac
     done | \
         git update-index --index-info
@@ -166,13 +166,13 @@ index_data_objects () {
 # Puts test-data objects into an index file.
 load_testdata_objects () {
     find_data_objects "$@" | \
-        index_data_objects "0"
+        index_data_objects "extdata"
 }
 
 # Puts paraview-data objects into an index file.
 load_data_objects () {
     find_data_objects "$@" | \
-        index_data_objects "1"
+        index_data_objects "inplace"
 }
 
 # Loads existing data files into an index file.
@@ -378,7 +378,7 @@ tree="$( git write-tree )"
 
 info "Generating testing data archive(s)..."
 for format in $formats; do
-    git_archive "$format" "$tree" "ParaViewTestingData-$version" "ParaView-$version" || \
+    git_archive "$format" "$tree" "ParaViewTestingDataStore-$version" "ParaView-$version" || \
         result=1
 done
 
@@ -390,7 +390,7 @@ tree="$( git write-tree )"
 
 info "Generating data archive(s)..."
 for format in $formats; do
-    git_archive "$format" "$tree" "ParaViewData-$version" "ParaView-$version" || \
+    git_archive "$format" "$tree" "ParaViewTestingDataFiles-$version" "ParaView-$version" || \
         result=1
 done
 

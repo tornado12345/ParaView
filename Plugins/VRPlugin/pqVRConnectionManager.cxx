@@ -49,6 +49,9 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <QList>
 #include <QtDebug>
 
+#include <algorithm>
+#include <cassert>
+
 // ----------------------------------------------------------------------------
 QPointer<pqVRConnectionManager> pqVRConnectionManager::Instance;
 void pqVRConnectionManager::setInstance(pqVRConnectionManager* mgr)
@@ -66,8 +69,9 @@ pqVRConnectionManager* pqVRConnectionManager::instance()
 // IMPORTANT: Make sure that this struct has no pointers.  All pointers should
 // be put in the class declaration. For all newly defined pointers make sure to
 // update constructor and destructor methods.
-struct pqVRConnectionManager::pqInternals
+class pqVRConnectionManager::pqInternals
 {
+public:
 #if PARAVIEW_PLUGIN_VRPlugin_USE_VRPN
   QList<QPointer<pqVRPNConnection> > VRPNConnections;
 #endif
@@ -102,7 +106,7 @@ void pqVRConnectionManager::add(pqVRPNConnection* conn)
 {
   this->Internals->VRPNConnections.push_front(conn);
   conn->setQueue(this->Internals->Queue);
-  emit this->connectionsChanged();
+  Q_EMIT this->connectionsChanged();
 }
 
 // ----------------------------------------------------------------------------
@@ -110,7 +114,7 @@ void pqVRConnectionManager::remove(pqVRPNConnection* conn)
 {
   conn->stop();
   this->Internals->VRPNConnections.removeAll(conn);
-  emit this->connectionsChanged();
+  Q_EMIT this->connectionsChanged();
 }
 
 // ----------------------------------------------------------------------------
@@ -137,7 +141,7 @@ void pqVRConnectionManager::add(pqVRUIConnection* conn)
 {
   this->Internals->VRUIConnections.push_front(conn);
   conn->setQueue(this->Internals->Queue);
-  emit this->connectionsChanged();
+  Q_EMIT this->connectionsChanged();
 }
 
 // ----------------------------------------------------------------------------
@@ -145,7 +149,7 @@ void pqVRConnectionManager::remove(pqVRUIConnection* conn)
 {
   conn->stop();
   this->Internals->VRUIConnections.removeAll(conn);
-  emit this->connectionsChanged();
+  Q_EMIT this->connectionsChanged();
 }
 
 // ----------------------------------------------------------------------------
@@ -176,7 +180,7 @@ void pqVRConnectionManager::clear()
 #if PARAVIEW_PLUGIN_VRPlugin_USE_VRUI
   this->Internals->VRUIConnections.clear();
 #endif
-  emit this->connectionsChanged();
+  Q_EMIT this->connectionsChanged();
 }
 
 // ----------------------------------------------------------------------------
@@ -201,7 +205,7 @@ QList<QString> pqVRConnectionManager::connectionNames() const
     }
   }
 #endif
-  qSort(result);
+  std::sort(result.begin(), result.end());
   return result;
 }
 
@@ -296,6 +300,8 @@ void pqVRConnectionManager::configureConnections(vtkPVXMLElement* xml, vtkSMProx
         {
           const char* name = child->GetAttributeOrEmpty("name");
           const char* address = child->GetAttributeOrEmpty("address");
+          (void)name;
+          (void)address;
 // TODO: Need to throw some warning if VRPN is used when not
 // compiled. For now we will simply ignore VRPN configuration
 #if PARAVIEW_PLUGIN_VRPlugin_USE_VRPN
@@ -333,13 +339,13 @@ void pqVRConnectionManager::configureConnections(vtkPVXMLElement* xml, vtkSMProx
   {
     this->configureConnections(xml->FindNestedElementByName("VRConnectionManager"), locator);
   }
-  emit this->connectionsChanged();
+  Q_EMIT this->connectionsChanged();
 }
 
 // ----------------------------------------------------------------------------
 void pqVRConnectionManager::saveConnectionsConfiguration(vtkPVXMLElement* root)
 {
-  Q_ASSERT(root != NULL);
+  assert(root != NULL);
   vtkPVXMLElement* tempParent = vtkPVXMLElement::New();
   tempParent->SetName("VRConnectionManager");
 #if PARAVIEW_PLUGIN_VRPlugin_USE_VRPN

@@ -45,6 +45,14 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <QTimer>
 #include <QtDebug>
 
+#include <cassert>
+
+#if QT_VERSION < QT_VERSION_CHECK(5, 14, 0)
+#define QT_ENDL endl
+#else
+#define QT_ENDL Qt::endl
+#endif
+
 //-----------------------------------------------------------------------------
 class pqPluginDocumentationBehavior::pqInternals
 {
@@ -64,7 +72,7 @@ pqPluginDocumentationBehavior::pqPluginDocumentationBehavior(QHelpEngine* parent
   : Superclass(parentObject)
   , Internals(new pqInternals())
 {
-  Q_ASSERT(parentObject != NULL);
+  assert(parentObject != NULL);
 
   QObject::connect(&this->Internals->Timer, SIGNAL(timeout()), this, SLOT(refreshHelpEngine()));
 
@@ -105,7 +113,7 @@ void pqPluginDocumentationBehavior::updatePlugin(vtkPVPlugin* plugin)
   plugin->GetBinaryResources(resources);
 
   QHelpEngine* engine = qobject_cast<QHelpEngine*>(this->parent());
-  Q_ASSERT(engine);
+  assert(engine);
 
   for (size_t cc = 0; cc < resources.size(); cc++)
   {
@@ -118,14 +126,14 @@ void pqPluginDocumentationBehavior::updatePlugin(vtkPVPlugin* plugin)
     QTemporaryFile* file = new QTemporaryFile(this);
     if (!file->open())
     {
-      qCritical() << "Failed to create temporary files." << endl;
+      qCritical() << "Failed to create temporary files." << QT_ENDL;
       delete[] decoded_stream;
       decoded_stream = NULL;
       continue;
     }
     qint64 written =
       file->write(reinterpret_cast<char*>(decoded_stream), static_cast<qint64>(length));
-    Q_ASSERT(written == static_cast<qint64>(length));
+    assert(written == static_cast<qint64>(length));
     (void)written;
     engine->registerDocumentation(file->fileName());
 
@@ -140,7 +148,7 @@ void pqPluginDocumentationBehavior::updatePlugin(vtkPVPlugin* plugin)
 void pqPluginDocumentationBehavior::refreshHelpEngine()
 {
   QHelpEngine* engine = qobject_cast<QHelpEngine*>(this->parent());
-  Q_ASSERT(engine);
+  assert(engine);
 
   engine->setupData();
   engine->contentWidget()->reset();

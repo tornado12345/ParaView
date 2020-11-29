@@ -39,8 +39,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <QtDebug>
 
 // vtk includes
-#include "vtkConfigure.h" // for 64-bitness
 #include "vtkNew.h"
+#include "vtkOptions.h" // for 64-bitness
 #include "vtkSmartPointer.h"
 #include "vtkStringList.h"
 
@@ -81,16 +81,22 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "pqSMProxy.h"
 
 #include <QStringList>
+
+#include <cassert>
 #include <set>
 
-const int pqSMAdaptor::metaId = qRegisterMetaType<QList<QList<QVariant> > >();
+#if QT_VERSION < QT_VERSION_CHECK(5, 14, 0)
+#define QT_ENDL endl
+#else
+#define QT_ENDL Qt::endl
+#endif
 
 namespace
 {
 template <class T>
 T* FindDomain(vtkSMProperty* prop)
 {
-  Q_ASSERT(prop != NULL);
+  assert(prop != NULL);
 
   vtkSmartPointer<vtkSMDomainIterator> iter;
   iter.TakeReference(prop->NewDomainIterator());
@@ -134,7 +140,7 @@ pqSMAdaptor::PropertyType pqSMAdaptor::getPropertyType(vtkSMProperty* Property)
       type = pqSMAdaptor::PROXYLIST;
     }
     type = pqSMAdaptor::PROXY;
-    if (vtkSMProxyListDomain::SafeDownCast(Property->GetDomain("proxy_list")))
+    if (Property->FindDomain<vtkSMProxyListDomain>())
     {
       type = pqSMAdaptor::PROXYSELECTION;
     }
@@ -363,10 +369,8 @@ QList<pqSMProxy> pqSMAdaptor::getProxyPropertyDomain(vtkSMProperty* Property)
 
     // get group domain of this property
     // and add all proxies in those groups to our list
-    vtkSMProxyGroupDomain* gd;
-    vtkSMProxyListDomain* ld;
-    ld = vtkSMProxyListDomain::SafeDownCast(Property->GetDomain("proxy_list"));
-    gd = vtkSMProxyGroupDomain::SafeDownCast(Property->GetDomain("groups"));
+    auto ld = Property->FindDomain<vtkSMProxyListDomain>();
+    auto gd = Property->FindDomain<vtkSMProxyGroupDomain>();
     if (ld)
     {
       unsigned int numProxies = ld->GetNumberOfProxies();
@@ -634,7 +638,7 @@ void pqSMAdaptor::setSelectionProperty(
 
   if (value.size() != 2)
   {
-    qCritical() << "Method expected a list of pairs. Incorrect API." << endl;
+    qCritical() << "Method expected a list of pairs. Incorrect API." << QT_ENDL;
     return;
   }
 
@@ -705,7 +709,7 @@ void pqSMAdaptor::setSelectionProperty(
   {
     if (value.size() != 2)
     {
-      qCritical() << "Method expected a list of pairs. Incorrect API." << endl;
+      qCritical() << "Method expected a list of pairs. Incorrect API." << QT_ENDL;
     }
     QString name = value[0].toString();
     int status = value[1].toInt();
@@ -734,7 +738,7 @@ void pqSMAdaptor::setSelectionProperty(
   if (StringListDomain || StringDomain)
   {
     vtkSMStringVectorProperty* svp = vtkSMStringVectorProperty::SafeDownCast(Property);
-    Q_ASSERT(svp);
+    assert(svp);
     if (Type == CHECKED)
     {
       svp->SetElements(smValueStrings.GetPointer());
@@ -747,7 +751,7 @@ void pqSMAdaptor::setSelectionProperty(
   else if (EnumerationDomain)
   {
     vtkSMIntVectorProperty* ivp = vtkSMIntVectorProperty::SafeDownCast(Property);
-    Q_ASSERT(ivp);
+    assert(ivp);
     smValueInts.push_back(0); // avoids need to check for size==0.
     if (Type == CHECKED)
     {
@@ -1754,12 +1758,10 @@ QVariant pqSMAdaptor::convertToQVariant(const vtkVariant& variant)
     case VTK_UNSIGNED___INT64:
       return variant.ToTypeUInt64();
 #endif
-#ifdef VTK_TYPE_USE_LONG_LONG
     case VTK_LONG_LONG:
       return variant.ToLongLong();
     case VTK_UNSIGNED_LONG_LONG:
       return variant.ToUnsignedLongLong();
-#endif
     case VTK_FLOAT:
       return variant.ToFloat();
     case VTK_DOUBLE:

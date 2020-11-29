@@ -45,6 +45,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <QSignalBlocker>
 #include <QVBoxLayout>
 
+#include <cassert>
+
 namespace
 {
 QIcon get_icon(int assoc)
@@ -52,17 +54,17 @@ QIcon get_icon(int assoc)
   switch (assoc)
   {
     case vtkDataObject::POINT:
-      return QIcon(":/pqWidgets/Icons/pqPointData16.png");
+      return QIcon(":/pqWidgets/Icons/pqPointData.svg");
     case vtkDataObject::CELL:
-      return QIcon(":/pqWidgets/Icons/pqCellData16.png");
+      return QIcon(":/pqWidgets/Icons/pqCellData.svg");
     case vtkDataObject::FIELD:
-      return QIcon(":/pqWidgets/Icons/pqGlobalData16.png");
+      return QIcon(":/pqWidgets/Icons/pqGlobalData.svg");
     case vtkDataObject::VERTEX:
-      return QIcon(":/pqWidgets/Icons/pqPointData16.png");
+      return QIcon(":/pqWidgets/Icons/pqPointData.svg");
     case vtkDataObject::EDGE:
-      return QIcon(":/pqWidgets/Icons/pqEdgeCenterData16.png");
+      return QIcon(":/pqWidgets/Icons/pqEdgeCenterData.svg");
     case vtkDataObject::ROW:
-      return QIcon(":/pqWidgets/Icons/pqSpreadsheet16.png");
+      return QIcon(":/pqWidgets/Icons/pqSpreadsheet.svg");
     default:
       return QIcon();
   }
@@ -70,7 +72,7 @@ QIcon get_icon(int assoc)
 
 QIcon get_none_icon()
 {
-  return QIcon(":/pqWidgets/Icons/pqCancel32.png");
+  return QIcon(":/pqWidgets/Icons/pqCancel.svg");
 }
 
 QString get_label(const QString& name, bool is_partial)
@@ -99,7 +101,7 @@ public:
    */
   void updateDomain()
   {
-    Q_ASSERT(this->ComboBox && this->Domain);
+    assert(this->ComboBox && this->Domain);
     const QSignalBlocker blocker(this->ComboBox);
 
     auto combobox = this->ComboBox;
@@ -111,12 +113,13 @@ public:
     {
       const auto aname = ald->GetString(cc);
       const bool is_partial = ald->IsArrayPartial(cc) ? true : false;
-      const int assoc = ald->GetDomainAssociation(cc);
+      const int icon_association = ald->GetDomainAssociation(cc);
+      const int association = ald->GetFieldAssociation(cc);
       const bool is_nonestring = (none_string && strcmp(none_string, aname) == 0);
       const int index = combobox->count();
-      combobox->addItem(
-        is_nonestring ? get_none_icon() : get_icon(assoc), ::get_label(aname, is_partial));
-      combobox->setItemData(index, assoc, ArrayAssociationRole);
+      combobox->addItem(is_nonestring ? get_none_icon() : get_icon(icon_association),
+        ::get_label(aname, is_partial));
+      combobox->setItemData(index, association, ArrayAssociationRole);
       combobox->setItemData(index, aname, ArrayNameRole);
     }
 
@@ -203,7 +206,7 @@ protected:
   void setServerManagerValue(bool use_unchecked, const QVariant& value) override
   {
     QList<QVariant> list = value.value<QList<QVariant> >();
-    Q_ASSERT(list.size() == 2);
+    assert(list.size() == 2);
 
     vtkSMPropertyHelper helper(this->propertySM());
     helper.SetUseUnchecked(use_unchecked);
@@ -244,7 +247,7 @@ pqArraySelectorPropertyWidget::pqArraySelectorPropertyWidget(
   internals.ComboBox = combobox;
 
   auto ald = smproperty->FindDomain<vtkSMArrayListDomain>();
-  Q_ASSERT(ald != nullptr);
+  assert(ald != nullptr);
 
   // update domain.
   internals.Domain = ald;
@@ -252,7 +255,7 @@ pqArraySelectorPropertyWidget::pqArraySelectorPropertyWidget(
   internals.VTKConnect->Connect(ald, vtkCommand::DomainModifiedEvent, this, SLOT(domainModified()));
 
   auto vproperty = vtkSMVectorProperty::SafeDownCast(smproperty);
-  Q_ASSERT(vproperty);
+  assert(vproperty);
 
   if (vproperty->GetNumberOfElements() == 2 || vproperty->GetNumberOfElements() == 5)
   {
@@ -268,7 +271,7 @@ pqArraySelectorPropertyWidget::pqArraySelectorPropertyWidget(
   QObject::connect(combobox, QOverload<int>::of(&QComboBox::currentIndexChanged), [this](int) {
     this->Internals->pruneUnusedUnknownItems();
     this->Internals->updateArrayToCurrent();
-    emit this->arrayChanged();
+    Q_EMIT this->arrayChanged();
   });
 }
 
@@ -294,7 +297,7 @@ QList<QVariant> pqArraySelectorPropertyWidget::array() const
 //-----------------------------------------------------------------------------
 void pqArraySelectorPropertyWidget::setArray(const QList<QVariant>& val)
 {
-  Q_ASSERT(val.size() == 2);
+  assert(val.size() == 2);
   this->setArray(val[0].toInt(), val[1].toString());
 }
 

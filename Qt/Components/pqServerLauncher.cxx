@@ -67,6 +67,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <QTimer>
 #include <QtDebug>
 
+#include <cassert>
+
 //----------------------------------------------------------------------------
 const QMetaObject* pqServerLauncher::DefaultServerLauncherType = NULL;
 const QMetaObject* pqServerLauncher::setServerDefaultLauncherType(const QMetaObject* other)
@@ -237,7 +239,7 @@ bool createWidgets(QMap<QString, pqWidget*>& widgets, QDialog& dialog,
   const pqServerConfiguration& configuration, QProcessEnvironment& options)
 {
   vtkPVXMLElement* optionsXML = configuration.optionsXML();
-  Q_ASSERT(optionsXML != NULL);
+  assert(optionsXML != NULL);
 
   QFormLayout* formLayout = new QFormLayout();
   dialog.setLayout(formLayout);
@@ -590,7 +592,7 @@ bool pqServerLauncher::connectToServer()
   vtkProcessModule* pm = vtkProcessModule::GetProcessModule();
   vtkNetworkAccessManager* nam = pm->GetNetworkAccessManager();
   vtkPVOptions* options = pm->GetOptions();
-  QDialog dialog(pqCoreUtilities::mainWidget());
+  QDialog dialog(pqCoreUtilities::mainWidget(), Qt::WindowStaysOnTopHint);
   Ui::pqConnectIdDialog ui;
   ui.setupUi(&dialog);
   ui.connectId->setMaximum(VTK_INT_MAX);
@@ -613,7 +615,7 @@ bool pqServerLauncher::connectToPrelaunchedServer()
 {
   pqObjectBuilder* builder = pqApplicationCore::instance()->getObjectBuilder();
 
-  QDialog dialog(pqCoreUtilities::mainWidget());
+  QDialog dialog(pqCoreUtilities::mainWidget(), Qt::WindowStaysOnTopHint);
   QObject::connect(&dialog, SIGNAL(rejected()), builder, SLOT(abortPendingConnections()));
 
   Ui::pqServerLauncherDialog ui;
@@ -656,7 +658,7 @@ bool pqServerLauncher::promptOptions()
     return true;
   }
 
-  QDialog dialog(pqCoreUtilities::mainWidget());
+  QDialog dialog(pqCoreUtilities::mainWidget(), Qt::WindowStaysOnTopHint);
 
   // setup the dialog using the configuration's XML.
   QMap<QString, pqWidget*>& widgets = this->Internals->ActiveWidgets;
@@ -731,7 +733,7 @@ bool pqServerLauncher::launchServer(bool show_status_dialog)
   }
 
   // Pop-up a dialog to tell the user that the server is being launched.
-  QDialog dialog(pqCoreUtilities::mainWidget());
+  QDialog dialog(pqCoreUtilities::mainWidget(), Qt::WindowStaysOnTopHint);
   Ui::pqServerLauncherDialog ui;
   ui.setupUi(&dialog);
   ui.cancel->hide();

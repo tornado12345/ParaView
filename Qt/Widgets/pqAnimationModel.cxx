@@ -32,6 +32,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "pqAnimationModel.h"
 
+#include "assert.h"
+
 #include <QEvent>
 #include <QGraphicsSceneMouseEvent>
 #include <QGraphicsView>
@@ -42,6 +44,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "pqAnimationTrack.h"
 #include "pqCheckBoxPixMaps.h"
 
+#include <cassert>
 #include <iostream>
 
 pqAnimationModel::pqAnimationModel(QGraphicsView* p)
@@ -274,7 +277,7 @@ double pqAnimationModel::timeFromTick(int tick)
 {
   if (this->Mode == Custom)
   {
-    Q_ASSERT(tick <= this->CustomTicks.size());
+    assert(tick <= this->CustomTicks.size());
     return this->CustomTicks[tick];
   }
 
@@ -338,8 +341,8 @@ void pqAnimationModel::drawForeground(QPainter* painter, const QRectF&)
 
   // make background for time labels white
   painter->save();
-  painter->setBrush(QColor(255, 255, 255));
-  painter->setPen(QColor());
+  painter->setBrush(this->palette().base());
+  painter->setPen(Qt::NoPen);
   painter->drawRect(labelRect);
   painter->restore();
 
@@ -350,25 +353,38 @@ void pqAnimationModel::drawForeground(QPainter* painter, const QRectF&)
   QFontMetrics metrics(view->font());
   int num = qRound(labelRect.width() / (9 * metrics.maxWidth()));
   num = num == 0 ? 1 : num;
-  double w = labelRect.width() / num;
 
   painter->save();
-  painter->setPen(QColor(0, 0, 0));
-  painter->drawText(QRectF(labelRect.left(), labelRect.top(), w / 2.0, rh),
-    Qt::AlignLeft | Qt::AlignVCenter,
-    QString::number(this->StartTime, this->TimeNotation.toLatin1(), this->TimePrecision));
+  painter->setPen(this->palette().color(QPalette::Text));
+
+  QList<const QRectF*> priorities;
+
+  // draw the new current time label if needed
+  QRectF newCurrentTimeLabRect;
+  if (this->NewCurrentTime != this->CurrentTime && this->CurrentKeyFrameGrabbed)
+  {
+    newCurrentTimeLabRect =
+      this->drawTimeLabel(this->NewCurrentTime, labelRect, painter, metrics, priorities);
+  }
+
+  // draw the current time label
+  priorities.append(&newCurrentTimeLabRect);
+  QRectF currentTimeLabRect =
+    this->drawTimeLabel(this->CurrentTime, labelRect, painter, metrics, priorities);
+
+  // draw the other labels
+  priorities.append(&currentTimeLabRect);
+
+  this->drawTimeLabel(this->StartTime, labelRect, painter, metrics, priorities);
 
   for (int i = 1; i < num; i++)
   {
     double time = this->StartTime + (this->EndTime - this->StartTime) * (double)i / (double)num;
-    double left = labelRect.left() + w / 2.0 + w * (i - 1);
-    painter->drawText(QRectF(left, labelRect.top(), w, rh), Qt::AlignCenter,
-      QString::number(time, this->TimeNotation.toLatin1(), this->TimePrecision));
+    this->drawTimeLabel(time, labelRect, painter, metrics, priorities);
   }
 
-  painter->drawText(QRectF(labelRect.right() - w / 2.0, labelRect.top(), w / 2.0, rh),
-    Qt::AlignRight | Qt::AlignVCenter,
-    QString::number(this->EndTime, this->TimeNotation.toLatin1(), this->TimePrecision));
+  this->drawTimeLabel(this->EndTime, labelRect, painter, metrics, priorities);
+
   painter->restore();
 
   // if sequence, draw a tick mark for each frame
@@ -387,12 +403,12 @@ void pqAnimationModel::drawForeground(QPainter* painter, const QRectF&)
   QPen pen = painter->pen();
   pen.setJoinStyle(Qt::MiterJoin);
   painter->setPen(pen);
-  painter->setBrush(QColor(0, 0, 0));
+  painter->setBrush(this->palette().text());
 
   QPolygonF poly = this->timeBarPoly(this->CurrentTime);
   painter->drawPolygon(poly);
 
-  if (this->NewCurrentTime != this->CurrentTime)
+  if (this->CurrentKeyFrameGrabbed)
   {
     double pos = this->positionFromTime(this->NewCurrentTime);
     QVector<QPointF> pts;
@@ -405,6 +421,84 @@ void pqAnimationModel::drawForeground(QPainter* painter, const QRectF&)
   }
 
   painter->restore();
+}
+
+QRectF pqAnimationModel::drawTimeLabel(double time, const QRectF& row, QPainter* painter,
+  const QFontMetrics& metrics, QList<const QRectF*> const& priorities)
+{
+  QString timeLabString = QString::number(time, this->TimeNotation.toLatin1(), this->TimePrecision);
+  double timeLabSize = metrics.width(timeLabString);
+  double currentTimePos = this->positionFromTime(time);
+  double timeLabPos;
+
+  if (currentTimePos - (timeLabSize / 2.0) < row.left())
+  {
+    timeLabPos = row.left();
+  }
+  else if (currentTimePos + (timeLabSize / 2.0) > row.right())
+  {
+    timeLabPos = row.right() - timeLabSize;
+  }
+  else
+  {
+    timeLabPos = currentTimePos - (timeLabSize / 2.0);
+  }
+
+  QRectF timeLabRect(timeLabPos, row.top(), timeLabSize, row.height());
+
+  // check the priorities to avoid drawing labels on top of others
+  const QRectF* priority;
+  foreach (priority, priorities)
+  {
+    if (timeLabRect.intersects(*priority))
+    {
+      return timeLabRect;
+    }
+  }
+
+  painter->drawText(timeLabRect, Qt::AlignCenter, timeLabString);
+
+  return timeLabRect;
+}
+
+void pqAnimationModel::updateNewTime(QGraphicsSceneMouseEvent* mouseEvent)
+{
+  QPointF pos = mouseEvent->scenePos();
+
+  double time = this->timeFromPosition(pos.x());
+
+  // snap to ticks in sequence mode
+  if (this->mode() == Sequence || this->mode() == Custom)
+  {
+    int tick = this->tickFromTime(time);
+    time = this->timeFromTick(tick);
+  }
+  else
+  {
+    // snap to nearby snap hints (if any)
+    for (int i = 0; i < this->SnapHints.size(); i++)
+    {
+      if (qAbs(this->positionFromTime(this->SnapHints[i]) - this->positionFromTime(time)) < 3)
+      {
+        time = this->SnapHints[i];
+        break;
+      }
+    }
+  }
+
+  // clamp to start/end time
+  time = qMax(time, this->InteractiveRange.first);
+  time = qMin(time, this->InteractiveRange.second);
+
+  this->NewCurrentTime = time;
+
+  if (this->NewCurrentTime != this->CurrentTime && this->CurrentTimeGrabbed)
+  {
+    // update the current time
+    Q_EMIT this->currentTimeSet(this->NewCurrentTime);
+    return;
+  }
+  this->update();
 }
 
 bool pqAnimationModel::eventFilter(QObject* w, QEvent* e)
@@ -446,7 +540,7 @@ void pqAnimationModel::enabledChanged()
 bool pqAnimationModel::hitTestCurrentTimePoly(const QPointF& pos)
 {
   QPolygonF poly = this->timeBarPoly(this->CurrentTime);
-  QRectF rect = poly.boundingRect().adjusted(-1, -1, 1, 1);
+  QRectF rect = poly.boundingRect().adjusted(-4, -1, 4, 1);
   return rect.contains(pos);
 }
 
@@ -491,7 +585,7 @@ void pqAnimationModel::mouseDoubleClickEvent(QGraphicsSceneMouseEvent* mouseEven
     pqAnimationTrack* t = hitTestTracks(pos);
     if (t)
     {
-      emit trackSelected(t);
+      Q_EMIT trackSelected(t);
       return;
     }
   }
@@ -504,14 +598,23 @@ void pqAnimationModel::mousePressEvent(QGraphicsSceneMouseEvent* mouseEvent)
     return;
   }
 
-  // see if current time is grabbed
+  // see if current time is grabbed or if the time header is clicked
   QPointF pos = mouseEvent->scenePos();
-  if (this->hitTestCurrentTimePoly(pos))
+
+  // get the header rectangle
+  QRectF sr = this->sceneRect();
+  int rh = this->rowHeight();
+  const QRectF labelRect = QRectF(sr.left(), sr.top(), sr.width() - 1, rh);
+
+  if (this->hitTestCurrentTimePoly(pos) || labelRect.contains(pos))
   {
     this->CurrentTimeGrabbed = true;
     this->InteractiveRange.first = this->StartTime;
     this->InteractiveRange.second = this->EndTime;
   }
+
+  // update the new current time
+  this->updateNewTime(mouseEvent);
 
   // see if any keyframe is grabbed
   if (!this->CurrentTimeGrabbed)
@@ -536,13 +639,13 @@ void pqAnimationModel::mousePressEvent(QGraphicsSceneMouseEvent* mouseEvent)
           this->positionFromTime(this->normalizedTimeToTime(kf->normalizedStartTime()));
         double keyPos2 =
           this->positionFromTime(this->normalizedTimeToTime(kf->normalizedEndTime()));
-        if (qAbs(keyPos1 - pos.x()) < 3)
+        if (qAbs(keyPos1 - pos.x()) < 10)
         {
           this->CurrentTrackGrabbed = t;
           this->CurrentKeyFrameGrabbed = kf;
           this->CurrentKeyFrameEdge = 0;
         }
-        else if (qAbs(keyPos2 - pos.x()) < 3)
+        else if (qAbs(keyPos2 - pos.x()) < 10)
         {
           whichkf++;
           this->CurrentTrackGrabbed = t;
@@ -605,34 +708,7 @@ void pqAnimationModel::mouseMoveEvent(QGraphicsSceneMouseEvent* mouseEvent)
 
   if (this->CurrentTimeGrabbed || this->CurrentKeyFrameGrabbed)
   {
-    double time = this->timeFromPosition(pos.x());
-
-    // snap to ticks in sequence mode
-    // (should snap to hints if we find one closer? )
-    if (this->mode() == Sequence || this->mode() == Custom)
-    {
-      int tick = this->tickFromTime(time);
-      time = this->timeFromTick(tick);
-    }
-    else
-    {
-      // snap to nearby snap hints (if any)
-      for (int i = 0; i < this->SnapHints.size(); i++)
-      {
-        if (qAbs(this->positionFromTime(this->SnapHints[i]) - this->positionFromTime(time)) < 3)
-        {
-          time = this->SnapHints[i];
-          break;
-        }
-      }
-    }
-
-    // clamp to start/end time
-    time = qMax(time, this->InteractiveRange.first);
-    time = qMin(time, this->InteractiveRange.second);
-
-    this->NewCurrentTime = time;
-    this->update();
+    this->updateNewTime(mouseEvent);
     return;
   }
 
@@ -641,23 +717,27 @@ void pqAnimationModel::mouseMoveEvent(QGraphicsSceneMouseEvent* mouseEvent)
   // able to interact if the mouse was pressed at this location
   QGraphicsView* view = qobject_cast<QGraphicsView*>(this->parent());
 
-  if (this->hitTestCurrentTimePoly(pos))
+  if (mouseEvent->buttons() == Qt::NoButton)
   {
-    view->setCursor(QCursor(Qt::SizeHorCursor));
-    return;
-  }
-
-  // see if we're at the edge of any keyframe
-  pqAnimationTrack* t = hitTestTracks(pos);
-  pqAnimationKeyFrame* kf = hitTestKeyFrame(t, pos);
-  if (kf)
-  {
-    double keyPos1 = this->positionFromTime(this->normalizedTimeToTime(kf->normalizedStartTime()));
-    double keyPos2 = this->positionFromTime(this->normalizedTimeToTime(kf->normalizedEndTime()));
-    if (qAbs(keyPos1 - pos.x()) < 3 || qAbs(keyPos2 - pos.x()) < 3)
+    if (this->hitTestCurrentTimePoly(pos))
     {
       view->setCursor(QCursor(Qt::SizeHorCursor));
       return;
+    }
+
+    // see if we're at the edge of any keyframe
+    pqAnimationTrack* t = hitTestTracks(pos);
+    pqAnimationKeyFrame* kf = hitTestKeyFrame(t, pos);
+    if (kf)
+    {
+      double keyPos1 =
+        this->positionFromTime(this->normalizedTimeToTime(kf->normalizedStartTime()));
+      double keyPos2 = this->positionFromTime(this->normalizedTimeToTime(kf->normalizedEndTime()));
+      if (qAbs(keyPos1 - pos.x()) < 10 || qAbs(keyPos2 - pos.x()) < 10)
+      {
+        view->setCursor(QCursor(Qt::SizeHorCursor));
+        return;
+      }
     }
   }
 
@@ -670,14 +750,11 @@ void pqAnimationModel::mouseReleaseEvent(QGraphicsSceneMouseEvent*)
   if (this->CurrentTimeGrabbed)
   {
     this->CurrentTimeGrabbed = false;
-    emit this->currentTimeSet(this->NewCurrentTime);
-    this->NewCurrentTime = this->CurrentTime;
-    this->update();
   }
 
   if (this->CurrentKeyFrameGrabbed)
   {
-    emit this->keyFrameTimeChanged(this->CurrentTrackGrabbed, this->CurrentKeyFrameGrabbed,
+    Q_EMIT this->keyFrameTimeChanged(this->CurrentTrackGrabbed, this->CurrentKeyFrameGrabbed,
       this->CurrentKeyFrameEdge, this->NewCurrentTime);
 
     this->CurrentTrackGrabbed = NULL;

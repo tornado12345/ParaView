@@ -1,4 +1,4 @@
-/* Copyright 2018 NVIDIA Corporation. All rights reserved.
+/* Copyright 2020 NVIDIA Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -33,6 +33,7 @@
 #include <sstream>
 
 #ifdef _WIN32
+#define NOMINMAX
 #include <windows.h>
 #endif // _WIN32
 
@@ -42,6 +43,7 @@
 #include <GL/glu.h>
 #endif
 
+#include "vtkBoundingBox.h"
 #include "vtkCellData.h"
 #include "vtkCellIterator.h"
 #include "vtkCommand.h"
@@ -50,7 +52,7 @@
 #include "vtkMultiThreader.h"
 #include "vtkObjectFactory.h"
 #include "vtkOpenGLRenderWindow.h"
-#include "vtkPKdTree.h"
+#include "vtkPVRenderViewSettings.h"
 #include "vtkPointData.h"
 #include "vtkRenderWindow.h"
 #include "vtkRenderer.h"
@@ -66,20 +68,9 @@
 
 #include "vtknvindex_cluster_properties.h"
 #include "vtknvindex_forwarding_logger.h"
+#include "vtknvindex_instance.h"
 #include "vtknvindex_irregular_volume_mapper.h"
 #include "vtknvindex_utilities.h"
-#include "vtknvindex_volume_importer.h"
-
-#ifdef NVINDEX_INTERNAL_BUILD
-#include "version.h"
-#endif
-
-#if defined(MI_VERSION_STRING) && defined(MI_DATE_STRING)
-// Embed version string in output binary.
-const static volatile std::string NVINDEX_VERSION_STRING(
-  "==@@== NVIDIA IndeX for ParaView Plug-In, "
-  "r" MI_VERSION_STRING ", " MI_DATE_STRING "\n");
-#endif
 
 static const int TET_EDGES[6][2] = { { 0, 1 }, { 1, 2 }, { 2, 0 }, { 0, 3 }, { 1, 3 }, { 2, 3 } };
 
@@ -88,9 +79,6 @@ vtkStandardNewMacro(vtknvindex_irregular_volume_mapper);
 //----------------------------------------------------------------------------
 vtknvindex_irregular_volume_mapper::vtknvindex_irregular_volume_mapper()
   : m_is_mapper_initialized(false)
-  , m_is_index_initialized(false)
-  , m_is_viewer(false)
-  , m_is_nvindex_rank(false)
   , m_is_data_prepared(false)
   , m_config_settings_changed(false)
   , m_opacity_changed(false)
@@ -99,10 +87,13 @@ vtknvindex_irregular_volume_mapper::vtknvindex_irregular_volume_mapper()
   , m_rtc_param_changed(false)
 
 {
+  m_index_instance = vtknvindex_instance::get();
   m_controller = vtkMultiProcessController::GetGlobalController();
-  m_kd_tree = NULL;
   m_prev_property = "";
   m_last_MTime = 0;
+
+  vtkMath::UninitializeBounds(m_whole_bounds);
+  vtkMath::UninitializeBounds(m_subregion_bounds);
 }
 
 //----------------------------------------------------------------------------
@@ -135,17 +126,7 @@ void vtknvindex_irregular_volume_mapper::set_whole_bounds(
 //----------------------------------------------------------------------------
 void vtknvindex_irregular_volume_mapper::shutdown()
 {
-  if (m_is_nvindex_rank)
-  {
-    // Shut down forwarding logger.
-    vtknvindex::logger::vtknvindex_forwarding_logger_factory::delete_instance();
-
-    // Shut down the NVIDIA IndeX library.
-    m_application_context.shutdown();
-
-    // Unload the libraries.
-    m_application_context.unload_iindex();
-  }
+  // TODO: Delete volume from scene graph
 }
 
 //----------------------------------------------------------------------------
@@ -169,38 +150,14 @@ static void reset_orthogonal_projection_matrix(mi::Sint32& win_width, mi::Sint32
 }
 
 //-------------------------------------------------------------------------------------------------
-bool vtknvindex_irregular_volume_mapper::initialize_nvindex()
-{
-  if (!m_application_context.load_nvindex_library())
-  {
-    return false;
-  }
-
-  mi::Uint32 setup_result = 0;
-  if ((setup_result =
-          m_application_context.setup_nvindex_library(m_cluster_properties->get_host_names())) != 0)
-  {
-    ERROR_LOG << "Failed to start the NVIDIA IndeX library: " << setup_result << ".";
-    return false;
-  }
-
-  m_application_context.initialize_arc();
-
-  m_is_index_initialized = true;
-
-  return true;
-}
-
-//-------------------------------------------------------------------------------------------------
 bool vtknvindex_irregular_volume_mapper::prepare_data()
 {
   vtkTimerLog::MarkStartEvent("NVIDIA-IndeX: Preparing data");
 
-  bool is_MPI = (m_controller->GetNumberOfProcesses() > 1);
-
-  if (is_MPI)
+  if (!m_index_instance->is_index_rank())
   {
     if (!m_cluster_properties->get_regular_volume_properties()->write_shared_memory(&m_volume_data,
+          this->GetInput(),
           m_cluster_properties->get_host_properties(m_controller->GetLocalProcessId()),
           0)) // time step
     {
@@ -226,43 +183,13 @@ void vtknvindex_irregular_volume_mapper::volume_changed()
 //-------------------------------------------------------------------------------------------------
 bool vtknvindex_irregular_volume_mapper::initialize_mapper(vtkRenderer* /*ren*/, vtkVolume* vol)
 {
-
-#if defined(MI_VERSION_STRING) && defined(MI_DATE_STRING)
-  INFO_LOG << "NVIDIA IndeX for ParaView Plugin "
-           << "(build " << MI_VERSION_STRING << ", " << MI_DATE_STRING ").";
-#endif
-
   vtkTimerLog::MarkStartEvent("NVIDIA-IndeX: Initialization");
 
-  m_cluster_properties->build_hosts_rank_distribution();
+  // Initialize and start IndeX (if not initialized yet and if this is an IndeX rank)
+  m_index_instance->init_index();
 
-  bool is_MPI = (m_controller->GetNumberOfProcesses() > 1);
-
-  mi::Sint32 cur_global_rank = 0;
-  mi::Sint32 cur_local_rank = 0;
-
-  if (is_MPI)
-  {
-    cur_global_rank = m_controller->GetLocalProcessId();
-    cur_local_rank = m_cluster_properties->get_cur_local_rank_id();
-  }
-
-  m_is_viewer = (cur_global_rank == 0);
-  m_is_nvindex_rank = (cur_local_rank == 0);
-
-  // Initialize NVIDIA IndeX at the local rank 0 on each node.
-  if (m_is_nvindex_rank)
-  {
-    if (!m_is_index_initialized)
-    {
-      if (!initialize_nvindex())
-      {
-        ERROR_LOG << "Failed to initialize the volume mapper for NVIDIA IndeX"
-                  << " in vtknvindex_representation::RequestData().";
-        return false;
-      }
-    }
-  }
+  const bool is_MPI = (m_controller->GetNumberOfProcesses() > 1);
+  const mi::Sint32 cur_global_rank = is_MPI ? m_controller->GetLocalProcessId() : 0;
 
   // Update volume first to make sure that the states are current.
   vol->Update();
@@ -270,24 +197,54 @@ bool vtknvindex_irregular_volume_mapper::initialize_mapper(vtkRenderer* /*ren*/,
   // Get the unstructured_grid.
   vtkUnstructuredGridBase* unstructured_grid = this->GetInput();
 
-  mi::Sint32 use_cell_colors;
+  mi::Sint32 cell_flag;
   m_scalar_array = this->GetScalars(unstructured_grid, this->ScalarMode, this->ArrayAccessMode,
-    this->ArrayId, this->ArrayName,
-    use_cell_colors); // CellFlag
+    this->ArrayId, this->ArrayName, cell_flag);
 
-  // Check for scalar per cell values
-  if (use_cell_colors)
+  bool is_data_supported = true;
+
+  // Data can only have a single component (not RGB/HSV format)
+  const int components = m_scalar_array->GetNumberOfComponents();
+  if (components > 1)
   {
-    ERROR_LOG << "Scalars per cell are not supported by NVIDIA IndeX";
-    return false;
+    ERROR_LOG << "The data array '" << this->ArrayName << "' has " << components << " components, "
+              << "which is not supported by NVIDIA IndeX.";
+    is_data_supported = false;
   }
 
-  // check for valid data types
+  // Only per point scalars and cell scalars are allowed
+  if (cell_flag != 0 && cell_flag != 1)
+  {
+    ERROR_LOG << "The data array '" << this->ArrayName << "' uses per field scalars, but "
+              << "only per point and per cell scalars are supported by NVIDIA IndeX (cellFlag is "
+              << cell_flag << ").";
+    is_data_supported = false;
+  }
+
+  // Check for valid data types
   const std::string scalar_type = m_scalar_array->GetDataTypeAsString();
   if (scalar_type != "unsigned char" && scalar_type != "unsigned short" && scalar_type != "float" &&
     scalar_type != "double")
   {
-    ERROR_LOG << "The scalar type: " << scalar_type << " is not supported by NVIDIA IndeX.";
+    ERROR_LOG << "The data array '" << this->ArrayName << "' uses the scalar type '" << scalar_type
+              << "', which is not supported for unstructured grids by NVIDIA IndeX.";
+    is_data_supported = false;
+  }
+  else if (scalar_type == "double" && is_data_supported)
+  {
+    // Only print the warning once per data array, and do not repeat when switching between arrays.
+    if (m_data_array_warning_printed.find(this->ArrayName) == m_data_array_warning_printed.end())
+    {
+      WARN_LOG << "The data array '" << this->ArrayName << "' has scalar values "
+               << "in double precision format, which is not natively supported by NVIDIA IndeX. "
+               << "The plugin will proceed to convert the values from double to float with the "
+               << "corresponding overhead.";
+      m_data_array_warning_printed.emplace(this->ArrayName);
+    }
+  }
+
+  if (!is_data_supported)
+  {
     return false;
   }
 
@@ -302,40 +259,20 @@ bool vtknvindex_irregular_volume_mapper::initialize_mapper(vtkRenderer* /*ren*/,
 
     // subset subregion
     // get geometry bounds
-    mi::Float64* bounds = unstructured_grid->GetBounds();
+    const mi::Float64* bounds = unstructured_grid->GetBounds();
 
     // get subset bounds
-    if (m_kd_tree)
+    if (vtkMath::AreBoundsInitialized(m_subregion_bounds))
     {
-      /* mi::Sint32 num_datasets = m_kd_tree->GetNumberOfDataSets(); */
-      /* mi::Sint32 num_regions = m_kd_tree->GetNumberOfRegions(); */
-      // INFO_LOG << "KdTree | datasets, regions: " << num_datasets << ", " << num_regions;
+      m_volume_data.subregion_id = cur_global_rank;
 
-      vtkIntArray* region_id_array = vtkIntArray::New();
-      mi::Sint32 region_count =
-        m_kd_tree->GetRegionAssignmentList(cur_global_rank, region_id_array);
+      m_volume_data.subregion_bbox.min.x = static_cast<mi::Float32>(m_subregion_bounds[0]);
+      m_volume_data.subregion_bbox.min.y = static_cast<mi::Float32>(m_subregion_bounds[2]);
+      m_volume_data.subregion_bbox.min.z = static_cast<mi::Float32>(m_subregion_bounds[4]);
 
-      if (region_count != 1)
-      {
-        ERROR_LOG << "The subset region is not available.";
-        return true;
-      }
-
-      mi::Sint32 region_id = region_id_array->GetValue(0);
-      region_id_array->Delete();
-
-      mi::Float64 region_bb[6];
-      m_kd_tree->GetRegionBounds(region_id, region_bb);
-
-      m_volume_data.subregion_id = region_id;
-
-      m_volume_data.subregion_bbox.min.x = static_cast<mi::Float32>(region_bb[0]);
-      m_volume_data.subregion_bbox.min.y = static_cast<mi::Float32>(region_bb[2]);
-      m_volume_data.subregion_bbox.min.z = static_cast<mi::Float32>(region_bb[4]);
-
-      m_volume_data.subregion_bbox.max.x = static_cast<mi::Float32>(region_bb[1]);
-      m_volume_data.subregion_bbox.max.y = static_cast<mi::Float32>(region_bb[3]);
-      m_volume_data.subregion_bbox.max.z = static_cast<mi::Float32>(region_bb[5]);
+      m_volume_data.subregion_bbox.max.x = static_cast<mi::Float32>(m_subregion_bounds[1]);
+      m_volume_data.subregion_bbox.max.y = static_cast<mi::Float32>(m_subregion_bounds[3]);
+      m_volume_data.subregion_bbox.max.z = static_cast<mi::Float32>(m_subregion_bounds[5]);
     }
     else
     {
@@ -351,18 +288,7 @@ bool vtknvindex_irregular_volume_mapper::initialize_mapper(vtkRenderer* /*ren*/,
     }
 
     // Tetrahedral mesh points.
-    vtkIdType num_points = unstructured_grid->GetNumberOfPoints();
-    m_volume_data.num_points = static_cast<mi::Uint32>(num_points);
-    m_volume_data.points.resize(num_points);
-    for (vtkIdType i = 0; i < num_points; ++i)
-    {
-      mi::Float64 point[3];
-      unstructured_grid->GetPoint(i, point);
-
-      m_volume_data.points[i].x = static_cast<mi::Float32>(point[0]);
-      m_volume_data.points[i].y = static_cast<mi::Float32>(point[1]);
-      m_volume_data.points[i].z = static_cast<mi::Float32>(point[2]);
-    }
+    m_volume_data.num_points = static_cast<mi::Uint32>(unstructured_grid->GetNumberOfPoints());
 
     // Tetrahedral mesh cells.
     bool gave_error = 0;
@@ -371,60 +297,28 @@ bool vtknvindex_irregular_volume_mapper::initialize_mapper(vtkRenderer* /*ren*/,
     mi::Float64 sum_inv_cell_edge_size2 = 0.0;
     mi::Uint64 num_cells = 0ull;
 
-    vtkIdType mesh_cells = unstructured_grid->GetNumberOfCells();
     m_volume_data.num_cells = 0;
-    m_volume_data.cells.reserve(mesh_cells);
 
     vtkSmartPointer<vtkCellIterator> cellIter =
       vtkSmartPointer<vtkCellIterator>::Take(unstructured_grid->NewCellIterator());
     for (cellIter->InitTraversal(); !cellIter->IsDoneWithTraversal(); cellIter->GoToNextCell())
     {
-      vtkIdType npts = cellIter->GetNumberOfPoints();
+      const vtkIdType npts = cellIter->GetNumberOfPoints();
       if (npts != 4)
       {
         if (!gave_error)
         {
-          vtkErrorMacro("Encountered non-tetrahedral cell. NVIDIA IndeX's irregular volume "
-                        "renderer supports tetrahedral cells only.");
+          ERROR_LOG << "Encountered non-tetrahedral cell with " << npts
+                    << " points. The NVIDIA IndeX plugin currently "
+                       "supports tetrahedral cells only.";
           gave_error = true;
         }
         continue;
       }
 
-      vtkIdType* cell_point_ids = cellIter->GetPointIds()->GetPointer(0);
-
-      // check for degenerated cells
-      bool invalid_cell = false;
-      for (mi::Uint32 i = 0; i < 3; i++)
-      {
-        for (mi::Uint32 j = i + 1; j < 4; j++)
-        {
-          if (cell_point_ids[i] == cell_point_ids[j])
-          {
-            invalid_cell = true;
-            break;
-          }
-        }
-
-        if (invalid_cell)
-          break;
-      }
-
-      if (invalid_cell)
-      {
-        continue;
-      }
+      const vtkIdType* cell_point_ids = cellIter->GetPointIds()->GetPointer(0);
 
       m_volume_data.num_cells++;
-
-      mi::math::Vector<mi::Uint32, 4> cur_cell;
-
-      cur_cell.x = static_cast<mi::Uint32>(cell_point_ids[0]);
-      cur_cell.y = static_cast<mi::Uint32>(cell_point_ids[1]);
-      cur_cell.z = static_cast<mi::Uint32>(cell_point_ids[2]);
-      cur_cell.w = static_cast<mi::Uint32>(cell_point_ids[3]);
-
-      m_volume_data.cells.push_back(cur_cell);
 
       mi::Float64 avg_edge_size2 = 0.0;
       for (mi::Uint32 i = 0; i < 6; i++)
@@ -456,7 +350,7 @@ bool vtknvindex_irregular_volume_mapper::initialize_mapper(vtkRenderer* /*ren*/,
       mi::Float64 avg_edge = 0.0;
       m_controller->Reduce(&sum_inv_cell_edge_size2, &avg_edge, 1, vtkCommunicator::SUM_OP, 0);
 
-      if (m_is_viewer)
+      if (m_index_instance->is_index_viewer())
       {
         avg_edge /= static_cast<mi::Float64>(m_controller->GetNumberOfProcesses());
         m_cluster_properties->get_config_settings()->set_ivol_step_size(
@@ -472,6 +366,14 @@ bool vtknvindex_irregular_volume_mapper::initialize_mapper(vtkRenderer* /*ren*/,
 
     // scalars
     m_volume_data.scalars = m_scalar_array->GetVoidPointer(0);
+    m_volume_data.cell_flag = cell_flag;
+    m_volume_data.num_scalars =
+      (cell_flag == 1 ? m_volume_data.num_cells : m_volume_data.num_points);
+
+    if (m_index_instance->is_index_rank())
+      m_volume_data.pv_unstructured_grid = unstructured_grid;
+    else
+      m_volume_data.pv_unstructured_grid = nullptr;
 
     // fill dataset parameters struct.
     vtknvindex_dataset_parameters dataset_parameters;
@@ -489,7 +391,7 @@ bool vtknvindex_irregular_volume_mapper::initialize_mapper(vtkRenderer* /*ren*/,
     dataset_parameters.bounds[4] = m_volume_data.subregion_bbox.min.z;
     dataset_parameters.bounds[5] = m_volume_data.subregion_bbox.max.z;
 
-    dataset_parameters.volume_data = static_cast<void*>(&m_volume_data);
+    dataset_parameters.volume_data = &m_volume_data;
 
     // clean shared memory
     m_cluster_properties->unlink_shared_memory(true);
@@ -497,13 +399,14 @@ bool vtknvindex_irregular_volume_mapper::initialize_mapper(vtkRenderer* /*ren*/,
     if (is_MPI)
     {
       mi::Sint32 current_hostid = 0;
-      if (m_is_nvindex_rank)
+      if (m_index_instance->is_index_rank())
       {
         // This is generated by NVIDIA IndeX.
         current_hostid = get_local_hostid();
       }
 
-      if (!m_cluster_properties->retrieve_cluster_configuration(dataset_parameters, current_hostid))
+      if (!m_cluster_properties->retrieve_cluster_configuration(
+            dataset_parameters, current_hostid, m_index_instance->is_index_rank()))
       {
         ERROR_LOG << "Failed to retrieve cluster configuration"
                   << " in vtknvindex_representation::RequestData().";
@@ -533,7 +436,7 @@ bool vtknvindex_irregular_volume_mapper::initialize_mapper(vtkRenderer* /*ren*/,
 //-------------------------------------------------------------------------------------------------
 mi::Sint32 vtknvindex_irregular_volume_mapper::get_local_hostid()
 {
-  return m_application_context.m_icluster_configuration->get_local_host_id();
+  return m_index_instance->m_icluster_configuration->get_local_host_id();
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -544,32 +447,49 @@ void vtknvindex_irregular_volume_mapper::set_cluster_properties(
   m_scene.set_cluster_properties(cluster_properties);
 }
 
-void vtknvindex_irregular_volume_mapper::set_domain_kdtree(vtkPKdTree* kd_tree)
+//-------------------------------------------------------------------------------------------------
+void vtknvindex_irregular_volume_mapper::set_raw_cuts(
+  const std::vector<vtkBoundingBox>& raw_cuts, const std::vector<int>& ranks)
 {
-  m_kd_tree = kd_tree;
+  m_raw_cuts = raw_cuts;
+  m_raw_cuts_ranks = ranks;
+}
+
+//-------------------------------------------------------------------------------------------------
+void vtknvindex_irregular_volume_mapper::set_subregion_bounds(const vtkBoundingBox& bbox)
+{
+  if (bbox.IsValid())
+  {
+    bbox.GetBounds(m_subregion_bounds);
+  }
+  else
+  {
+    vtkMath::UninitializeBounds(m_subregion_bounds);
+  }
 }
 
 //-------------------------------------------------------------------------------------------------
 void vtknvindex_irregular_volume_mapper::update_canvas(vtkRenderer* ren)
 {
-  mi::Sint32* window_size = ren->GetVTKWindow()->GetActualSize();
+  vtkWindow* win = ren->GetVTKWindow();
+  int* window_size = win->GetSize();
 
   const mi::math::Vector_struct<mi::Sint32, 2> main_window_resolution = { window_size[0],
     window_size[1] };
 
-  m_application_context.m_opengl_canvas.set_buffer_resolution(main_window_resolution);
-  m_application_context.m_opengl_canvas.set_vtk_renderer(ren);
+  m_index_instance->m_opengl_canvas.set_vtk_renderer(ren);
+  m_index_instance->m_opengl_canvas.set_buffer_resolution(main_window_resolution);
 
   if (ren->GetNumberOfPropsRendered())
   {
-    m_application_context.m_opengl_app_buffer.resize_buffer(main_window_resolution);
+    m_index_instance->m_opengl_app_buffer.resize_buffer(main_window_resolution);
 
     vtkOpenGLRenderWindow* vtk_gl_render_window =
       vtkOpenGLRenderWindow::SafeDownCast(ren->GetVTKWindow());
     mi::Sint32 depth_bits = vtk_gl_render_window->GetDepthBufferSize();
-    m_application_context.m_opengl_app_buffer.set_z_buffer_precision(depth_bits);
+    m_index_instance->m_opengl_app_buffer.set_z_buffer_precision(depth_bits);
 
-    mi::Uint32* pv_z_buffer = m_application_context.m_opengl_app_buffer.get_z_buffer_ptr();
+    mi::Uint32* pv_z_buffer = m_index_instance->m_opengl_app_buffer.get_z_buffer_ptr();
     glReadPixels(
       0, 0, window_size[0], window_size[1], GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, pv_z_buffer);
   }
@@ -590,12 +510,18 @@ void vtknvindex_irregular_volume_mapper::opacity_changed()
 }
 
 //-------------------------------------------------------------------------------------------------
-void vtknvindex_irregular_volume_mapper::rtc_kernel_changed(
-  vtknvindex_rtc_kernels kernel, const void* params_buffer, mi::Uint32 buffer_size)
+void vtknvindex_irregular_volume_mapper::rtc_kernel_changed(vtknvindex_rtc_kernels kernel,
+  const std::string& kernel_program, const void* params_buffer, mi::Uint32 buffer_size)
 {
   if (kernel != m_volume_rtc_kernel.rtc_kernel)
   {
     m_volume_rtc_kernel.rtc_kernel = kernel;
+    m_rtc_kernel_changed = true;
+  }
+
+  if (kernel_program != m_volume_rtc_kernel.kernel_program)
+  {
+    m_volume_rtc_kernel.kernel_program = kernel_program;
     m_rtc_kernel_changed = true;
   }
 
@@ -607,10 +533,35 @@ void vtknvindex_irregular_volume_mapper::rtc_kernel_changed(
 //-------------------------------------------------------------------------------------------------
 void vtknvindex_irregular_volume_mapper::Render(vtkRenderer* ren, vtkVolume* vol)
 {
+  if (!m_cluster_properties->is_active_instance())
+  {
+    return;
+  }
+
+  // Ensure IceT is disabled in MPI mode, print warning only on first rank
+  if (m_controller->GetNumberOfProcesses() > 1 && m_controller->GetLocalProcessId() == 0)
+  {
+    static bool IceT_was_enabled = false;
+    if (!vtkPVRenderViewSettings::GetInstance()->GetDisableIceT())
+    {
+      WARN_LOG << "IceT compositing must be disabled when using the NVIDIA IndeX plugin with MPI, "
+                  "otherwise nothing will be rendered. "
+               << "Please open 'Edit | Settings', go to the 'Render View' tab, activate 'Advanced "
+                  "Properties' (gear icon) and check 'Disable IceT'. "
+               << "Then restart ParaView for the setting to take effect.";
+      IceT_was_enabled = true;
+    }
+    else if (IceT_was_enabled)
+    {
+      WARN_LOG << "Please restart ParaView so that IceT compositing is fully disabled.";
+      IceT_was_enabled = false; // only print this once
+    }
+  }
+
   // check if volume data was modified
-  mi::Sint32 use_cell_colors;
+  mi::Sint32 cell_flag;
   vtkDataArray* scalar_array = this->GetScalars(this->GetInput(), this->ScalarMode,
-    this->ArrayAccessMode, this->ArrayId, this->ArrayName, use_cell_colors);
+    this->ArrayAccessMode, this->ArrayId, this->ArrayName, cell_flag);
 
   vtkMTimeType cur_MTime = scalar_array->GetMTime();
 
@@ -618,7 +569,7 @@ void vtknvindex_irregular_volume_mapper::Render(vtkRenderer* ren, vtkVolume* vol
   {
     m_last_MTime = cur_MTime;
   }
-  else if (m_last_MTime < cur_MTime)
+  else if (m_last_MTime != cur_MTime)
   {
     m_last_MTime = cur_MTime;
     m_volume_changed = true;
@@ -641,6 +592,13 @@ void vtknvindex_irregular_volume_mapper::Render(vtkRenderer* ren, vtkVolume* vol
     return;
   }
 
+  bool needs_activate = m_cluster_properties->activate();
+  if (needs_activate)
+  {
+    // Importers might be triggered again, so data must be made available
+    m_is_data_prepared = false;
+  }
+
   // Prepare data to be rendered.
   if ((!m_is_data_prepared || m_volume_changed) && !prepare_data())
   {
@@ -653,92 +611,133 @@ void vtknvindex_irregular_volume_mapper::Render(vtkRenderer* ren, vtkVolume* vol
   // Wait all ranks finish to write volume data before the render starts.
   m_controller->Barrier();
 
-  if (m_is_viewer)
+  if (m_index_instance->is_index_viewer() && m_index_instance->is_index_initialized())
   {
     vtkTimerLog::MarkStartEvent("NVIDIA-IndeX: Rendering");
 
-    // DiCE database access.
-    mi::base::Handle<mi::neuraylib::IDice_transaction> dice_transaction(
-      m_application_context.m_global_scope->create_transaction<mi::neuraylib::IDice_transaction>());
-    assert(dice_transaction.is_valid_interface());
-
-    // Setup scene information.
-    if (!m_scene.scene_created())
-      m_scene.create_scene(
-        ren, vol, m_application_context, dice_transaction, vtknvindex_scene::VOLUME_TYPE_IRREGULAR);
-    else if (m_volume_changed)
-      m_scene.update_volume(
-        m_application_context, dice_transaction, vtknvindex_scene::VOLUME_TYPE_IRREGULAR);
-
-    // Update scene parameters.
-    m_scene.update_scene(ren, vol, m_application_context, dice_transaction,
-      m_config_settings_changed, m_opacity_changed, false);
-    m_config_settings_changed = false;
-    m_opacity_changed = false;
-
-    // Update CUDA code.
-    if (m_rtc_kernel_changed || m_rtc_param_changed)
     {
-      m_scene.update_rtc_kernel(dice_transaction, m_volume_rtc_kernel,
-        vtknvindex_scene::VOLUME_TYPE_IRREGULAR, m_rtc_kernel_changed);
-      m_rtc_kernel_changed = false;
-      m_rtc_param_changed = false;
-    }
+      // DiCE database access.
+      mi::base::Handle<mi::neuraylib::IDice_transaction> dice_transaction(
+        m_index_instance->m_global_scope->create_transaction<mi::neuraylib::IDice_transaction>());
+      assert(dice_transaction.is_valid_interface());
 
-    // Update render canvas.
-    update_canvas(ren);
+      // Setup scene information.
+      if (!m_scene.scene_created())
+      {
+        if (!m_raw_cuts.empty())
+        {
+          vtknvindex_KDTree_affinity* affinity_vtk_kdtree =
+            m_cluster_properties->get_affinity_kdtree();
+          if (affinity_vtk_kdtree)
+          {
+            affinity_vtk_kdtree->build(m_raw_cuts, m_raw_cuts_ranks);
+          }
+        }
+
+        m_scene.create_scene(ren, vol, dice_transaction, vtknvindex_scene::VOLUME_TYPE_IRREGULAR);
+        needs_activate = true;
+      }
+      else if (m_volume_changed)
+      {
+        m_scene.update_volume(dice_transaction, vtknvindex_scene::VOLUME_TYPE_IRREGULAR);
+        needs_activate = true;
+      }
+
+      if (needs_activate)
+      {
+        m_cluster_properties->warn_if_multiple_visible_instances(this->GetArrayName());
+        m_scene.activate(dice_transaction.get());
+        m_config_settings_changed = true; // force setting region-of-interest
+      }
+
+      // Update scene parameters.
+      m_scene.update_scene(
+        ren, vol, dice_transaction, m_config_settings_changed, m_opacity_changed, false);
+      m_config_settings_changed = false;
+      m_opacity_changed = false;
+
+      // Update CUDA code.
+      if (m_rtc_kernel_changed || m_rtc_param_changed)
+      {
+        m_scene.update_rtc_kernel(dice_transaction, m_volume_rtc_kernel,
+          vtknvindex_scene::VOLUME_TYPE_IRREGULAR, m_rtc_kernel_changed);
+        m_rtc_kernel_changed = false;
+        m_rtc_param_changed = false;
+      }
+
+      // Update render canvas.
+      update_canvas(ren);
+
+      dice_transaction->commit();
+    }
 
     // Render the scene.
     {
-      // Access the session instance from the database.
-      mi::base::Handle<const nv::index::ISession> session(
-        dice_transaction->access<const nv::index::ISession>(m_application_context.m_session_tag));
-      assert(session.is_valid_interface());
+      // DiCE database access.
+      mi::base::Handle<mi::neuraylib::IDice_transaction> dice_transaction(
+        m_index_instance->m_global_scope->create_transaction<mi::neuraylib::IDice_transaction>());
+      assert(dice_transaction.is_valid_interface());
 
-      // Access the scene instance from the database.
-      mi::base::Handle<const nv::index::IScene> scene(
-        dice_transaction->access<const nv::index::IScene>(session->get_scene()));
-      assert(scene.is_valid_interface());
-
-      // Synchronize and update the NVIDIA IndeX session with the
-      // scene (volume data, transformation matrix, camera, etc.).
-      m_application_context.m_iindex_session->update(
-        m_application_context.m_session_tag, dice_transaction.get());
-
-      // NVIDIA IndeX render call returns frame results
-      mi::base::Handle<nv::index::IFrame_results> frame_results(
-        m_application_context.m_iindex_rendering->render(m_application_context.m_session_tag,
-          &(m_application_context.m_opengl_canvas), // Opengl canvas.
-          dice_transaction.get(),
-          0,    // No progress_callback.
-          0,    // No Frame information
-          true, // = g_immediate_final_parallel_compositing
-          ren->GetNumberOfPropsRendered() ? &(m_application_context.m_opengl_app_buffer)
-                                          : NULL) // ParaView depth buffer, if present.
-        );
-
-      const mi::base::Handle<nv::index::IError_set> err_set(frame_results->get_error_set());
-      if (err_set->any_errors())
       {
-        std::ostringstream os;
-        const mi::Uint32 nb_err = err_set->get_nb_errors();
-        for (mi::Uint32 e = 0; e < nb_err; ++e)
+        // Access the session instance from the database.
+        mi::base::Handle<const nv::index::ISession> session(
+          dice_transaction->access<const nv::index::ISession>(m_index_instance->m_session_tag));
+        assert(session.is_valid_interface());
+
+        // Access the scene instance from the database.
+        mi::base::Handle<const nv::index::IScene> scene(
+          dice_transaction->access<const nv::index::IScene>(session->get_scene()));
+        assert(scene.is_valid_interface());
+
+        // Synchronize and update the NVIDIA IndeX session with the
+        // scene (volume data, transformation matrix, camera, etc.).
+        m_index_instance->m_iindex_session->update(
+          m_index_instance->m_session_tag, dice_transaction.get());
+
+        // NVIDIA IndeX render call returns frame results
+        mi::base::Handle<nv::index::IFrame_results> frame_results(
+          m_index_instance->m_iindex_rendering->render(m_index_instance->m_session_tag,
+            &(m_index_instance->m_opengl_canvas), // Opengl canvas.
+            dice_transaction.get(),
+            0,    // No progress_callback.
+            0,    // No Frame information
+            true, // = g_immediate_final_parallel_compositing
+            ren->GetNumberOfPropsRendered() ? &(m_index_instance->m_opengl_app_buffer)
+                                            : NULL) // ParaView depth buffer, if present.
+          );
+
+        const mi::base::Handle<nv::index::IError_set> err_set(frame_results->get_error_set());
+        if (err_set->any_errors())
         {
-          if (e != 0)
-            os << '\n';
-          const mi::base::Handle<nv::index::IError> err(err_set->get_error(e));
-          os << err->get_error_string();
+          std::ostringstream os;
+          const mi::Uint32 nb_err = err_set->get_nb_errors();
+          for (mi::Uint32 e = 0; e < nb_err; ++e)
+          {
+            if (e != 0)
+              os << '\n';
+            const mi::base::Handle<nv::index::IError> err(err_set->get_error(e));
+            os << err->get_error_string();
+          }
+          ERROR_LOG << "The NVIDIA IndeX rendering call failed with the following error(s): "
+                    << '\n'
+                    << os.str();
         }
-        ERROR_LOG << "The NVIDIA IndeX rendering call failed with the following error(s): " << '\n'
-                  << os.str();
+
+        if (m_cluster_properties->get_config_settings()->is_log_performance())
+          m_performance_values.print_perf_values(frame_results);
       }
 
-      if (m_cluster_properties->get_config_settings()->is_log_performance())
-        m_performance_values.print_perf_values(m_application_context, frame_results);
+      dice_transaction->commit();
     }
-    dice_transaction->commit();
 
     vtkTimerLog::MarkEndEvent("NVIDIA-IndeX: Rendering");
+  }
+  else if (m_index_instance->is_index_viewer())
+  {
+    static bool first = true;
+    if (first)
+      ERROR_LOG << "The NVIDIA IndeX plugin was not initialized! See the log output for details.";
+    first = false;
   }
 
   m_volume_changed = false;
@@ -746,4 +745,10 @@ void vtknvindex_irregular_volume_mapper::Render(vtkRenderer* ren, vtkVolume* vol
   // clean shared memory
   m_controller->Barrier();
   m_cluster_properties->unlink_shared_memory(false);
+}
+
+//-------------------------------------------------------------------------------------------------
+void vtknvindex_irregular_volume_mapper::set_visibility(bool visibility)
+{
+  m_cluster_properties->set_visibility(visibility);
 }

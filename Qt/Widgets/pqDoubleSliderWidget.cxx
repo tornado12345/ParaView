@@ -14,12 +14,12 @@
 =========================================================================*/
 #include "pqDoubleSliderWidget.h"
 
-#include "vtkPVConfig.h"
-
 // Qt includes
 #include <QDoubleValidator>
 #include <QHBoxLayout>
 #include <QSlider>
+
+#define DEFAULT_DOUBLE_PRECISION_VALUE 16
 
 pqDoubleSliderWidget::pqDoubleSliderWidget(QWidget* parent)
   : QWidget(parent)
@@ -84,7 +84,7 @@ void pqDoubleSliderWidget::setValue(double val)
     this->BlockUpdate = false;
   }
 
-  emit this->valueChanged(this->Value);
+  Q_EMIT this->valueChanged(this->Value);
 }
 
 //-----------------------------------------------------------------------------
@@ -179,7 +179,7 @@ void pqDoubleSliderWidget::emitValueEdited()
 {
   if (this->InteractingWithSlider == false)
   {
-    emit this->valueEdited(this->Value);
+    Q_EMIT this->valueEdited(this->Value);
   }
   else
   {

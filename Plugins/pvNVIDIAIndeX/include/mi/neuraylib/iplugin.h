@@ -1,9 +1,8 @@
-//*****************************************************************************
-// Copyright 2018 NVIDIA Corporation. All rights reserved.
-//*****************************************************************************
+/***************************************************************************************************
+ * Copyright 2020 NVIDIA Corporation. All rights reserved.
+ **************************************************************************************************/
 /// \file
 /// \brief Abstract interface for \neurayApiName plugins.
-//*****************************************************************************
 
 #ifndef MI_NEURAYLIB_IPLUGIN_H
 #define MI_NEURAYLIB_IPLUGIN_H
@@ -11,11 +10,9 @@
 #include <mi/base/interface_declare.h>
 #include <mi/base/plugin.h>
 
-namespace mi
-{
+namespace mi {
 
-namespace neuraylib
-{
+namespace neuraylib {
 
 class IPlugin_api;
 
@@ -30,17 +27,17 @@ class IPlugin_api;
 class IPlugin : public mi::base::Plugin
 {
 public:
-  /// Initializes the plugin.
-  ///
-  /// \param plugin_api   Provides access to API components available for plugins.
-  /// \return             \c true in case of success, and \c false otherwise.
-  virtual bool init(IPlugin_api* plugin_api) = 0;
+    /// Initializes the plugin.
+    ///
+    /// \param plugin_api   Provides access to API components available for plugins.
+    /// \return             \c true in case of success, and \c false otherwise.
+    virtual bool init( IPlugin_api* plugin_api) = 0;
 
-  /// De-initializes the plugin.
-  ///
-  /// \param plugin_api   Provides access to API components available for plugins.
-  /// \return             \c true in case of success, and \c false otherwise.
-  virtual bool exit(IPlugin_api* plugin_api) = 0;
+    /// De-initializes the plugin.
+    ///
+    /// \param plugin_api   Provides access to API components available for plugins.
+    /// \return             \c true in case of success, and \c false otherwise.
+    virtual bool exit( IPlugin_api* plugin_api) = 0;
 };
 
 /*@}*/ // end group mi_neuray_plugins

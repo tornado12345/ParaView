@@ -82,6 +82,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <QTreeWidget>
 #include <QVBoxLayout>
 
+#include <cassert>
+
 #if VTK_MODULE_ENABLE_ParaView_pqPython
 #include "pqPythonSyntaxHighlighter.h"
 #endif
@@ -159,6 +161,7 @@ pqStringVectorPropertyWidget::pqStringVectorPropertyWidget(
     vtkVLogF(PARAVIEW_LOG_APPLICATION_VERBOSITY(), "use `pqFileChooserWidget`.");
     pqFileChooserWidget* chooser = new pqFileChooserWidget(this);
     chooser->setObjectName("FileChooser");
+    chooser->setTitle(QString("Select %1").arg(smProperty->GetXMLLabel()));
 
     // decide whether to allow multiple files
     if (smProperty->GetRepeatable())
@@ -224,14 +227,21 @@ pqStringVectorPropertyWidget::pqStringVectorPropertyWidget(
       chooser->setExtension(supportedExtensions.join(";;"));
     }
 
-    pqServerManagerModel* smm = pqApplicationCore::instance()->getServerManagerModel();
-    chooser->setServer(smm->findServer(smProxy->GetSession()));
+    if (hints == nullptr || hints->FindNestedElementByName("BrowseLocalFileSystem") == nullptr)
+    {
+      pqServerManagerModel* smm = pqApplicationCore::instance()->getServerManagerModel();
+      chooser->setServer(smm->findServer(smProxy->GetSession()));
+    }
+    else
+    {
+      chooser->setServer(nullptr);
+    }
 
     vbox->addWidget(chooser);
   }
   else if (arrayListDomain)
   {
-    Q_ASSERT(smProperty->GetRepeatable());
+    assert(smProperty->GetRepeatable());
 
     vtkVLogF(PARAVIEW_LOG_APPLICATION_VERBOSITY(), "use `pqArraySelectionWidget`.");
 
@@ -259,8 +269,13 @@ pqStringVectorPropertyWidget::pqStringVectorPropertyWidget(
     new pqArrayListDomain(
       selectorWidget, smProxy->GetPropertyName(smProperty), smProxy, smProperty, arrayListDomain);
 
-    this->addPropertyLink(
-      selectorWidget, smProxy->GetPropertyName(smProperty), SIGNAL(widgetModified()), smProperty);
+    const char* property_name = smProxy->GetPropertyName(smProperty);
+    // pass icon hints, if provided.
+    if (auto aswhints = hints ? hints->FindNestedElementByName("ArraySelectionWidget") : nullptr)
+    {
+      selectorWidget->setIconType(property_name, aswhints->GetAttribute("icon_type"));
+    }
+    this->addPropertyLink(selectorWidget, property_name, SIGNAL(widgetModified()), smProperty);
     this->setChangeAvailableAsChangeFinished(true);
   }
   else if (silDomain)
@@ -353,7 +368,8 @@ pqStringVectorPropertyWidget::pqStringVectorPropertyWidget(
     textEdit->setFont(textFont);
     textEdit->setObjectName(smProxy->GetPropertyName(smProperty));
     textEdit->setAcceptRichText(false);
-    textEdit->setTabStopWidth(2);
+    // tab is 2 spaces
+    textEdit->setTabStopDistance(this->fontMetrics().horizontalAdvance("  "));
     textEdit->setLineWrapMode(QTextEdit::NoWrap);
 
     this->setChangeAvailableAsChangeFinished(false);
@@ -415,7 +431,7 @@ pqStringVectorPropertyWidget::pqStringVectorPropertyWidget(
       this->addPropertyLink(widget, "scalars", SIGNAL(scalarsChanged()), smProperty);
       this->setChangeAvailableAsChangeFinished(true);
       vbox->addWidget(widget);
-      this->setShowLabel(true);
+      this->setShowLabel(false);
     }
     else
     {
